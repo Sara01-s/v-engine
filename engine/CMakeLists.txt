@@ -3,6 +3,9 @@ project(core)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_options(-Wc99-designator)
+add_compile_options(-Wall)
+add_compile_options(-Wpedantic)
 
 include(FetchContent)
 

@@ -468,17 +468,57 @@ VulkanRenderer::_init_swap_chain() noexcept {
     _swap_chain_images = std::move(images);
 
     // Store swap chain state.
-    _swap_chain_format = surface_format.format;
+    _swap_chain_image_format = surface_format.format;
     _swap_chain_extent = extent;
 }
 
 #pragma endregion SWAP_CHAIN
 
+#pragma region IMAGE_VIEWS
+
+void
+VulkanRenderer::_init_image_views() noexcept {
+    _image_views.resize(_swap_chain_images.size());
+
+    for (usize i {}; i < _swap_chain_images.size(); ++i) {
+        vk::ImageViewCreateInfo image_view_create_info {
+            .image = _swap_chain_images[i],
+            .viewType = vk::ImageViewType::e2D,
+            .format = _swap_chain_image_format,
+        };
+
+        // Use images as color targets, without mipmaps and multiple layers.
+        image_view_create_info.subresourceRange.aspectMask =
+            vk::ImageAspectFlagBits::eColor;
+        image_view_create_info.subresourceRange.baseMipLevel = 0;
+        image_view_create_info.subresourceRange.levelCount = 1;
+        image_view_create_info.subresourceRange.baseArrayLayer = 0;
+        image_view_create_info.subresourceRange.layerCount = 1;
+
+        // Default color components mapping.
+        image_view_create_info.components.r = vk::ComponentSwizzle::eIdentity;
+        image_view_create_info.components.g = vk::ComponentSwizzle::eIdentity;
+        image_view_create_info.components.b = vk::ComponentSwizzle::eIdentity;
+        image_view_create_info.components.a = vk::ComponentSwizzle::eIdentity;
+
+        auto [result, image_view] =
+            _logical_device->createImageViewUnique(image_view_create_info);
+
+        core_assert(
+            result == vk::Result::eSuccess,
+            "Failed to create unique image view."
+        );
+
+        _image_views[i] = std::move(image_view);
+    }
+}
+
+#pragma endregion IMAGE_VIEWS
+
 #pragma region PHYSICAL_DEVICE
 
 bool
 _check_device_extension_support(vk::PhysicalDevice const& device) {
-    u32 extension_count {0};
     auto [result, available_extensions] =
         device.enumerateDeviceExtensionProperties();
 
@@ -560,7 +600,6 @@ _rate_device_suitability(vk::PhysicalDevice const& device) noexcept {
 
     u32 score {0}; // Let's start the competition, will this device be the best?
     auto const& device_properties = device.getProperties();
-    auto const& device_features = device.getFeatures();
 
     Log::info("Rating device: ", device_properties.deviceName);
 
@@ -584,7 +623,6 @@ void
 VulkanRenderer::_init_physical_device() noexcept {
     core_assert(_surface.get(), "Surface is nullptr.");
 
-    u32 device_count {0};
     auto [result, physical_devices] = _vk_instance->enumeratePhysicalDevices();
 
     core_assert(

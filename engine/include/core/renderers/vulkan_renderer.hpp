@@ -86,11 +86,11 @@ private:
     // Swap chain.
     vk::UniqueSwapchainKHR _swap_chain {nullptr};
     std::vector<vk::Image> _swap_chain_images {};
-    vk::Format _swap_chain_format {};
+    vk::Format _swap_chain_image_format {};
     vk::Extent2D _swap_chain_extent {};
 
     // Image views.
-    std::vector<vk::ImageView> _image_views {};
+    std::vector<vk::UniqueImageView> _image_views {};
 };
 
 } // namespace core
