@@ -14,21 +14,21 @@ concept RendererAPI = requires(T renderer, GLFWwindow* window) {
     { renderer.cleanup() } -> std::same_as<void>;
 };
 
-template <RendererAPI GfxAPI>
+template <RendererAPI GraphicsAPI>
 class Renderer {
 public:
-    explicit Renderer(GfxAPI& gfx) : _gfx {gfx} {
+    explicit Renderer(GraphicsAPI& graphics) : _graphics {graphics} {
         _init_glfw();
-        _gfx.init(_window); // give gfx the ownership of _window.
+        _graphics.init(_window); // Give _graphics the ownership of _window.
     }
 
     ~Renderer() {
-        _gfx.cleanup();
+        _graphics.cleanup();
     }
 
     void
     render() {
-        _gfx.render();
+        _graphics.render();
     }
 
 private:
@@ -52,7 +52,7 @@ private:
     }
 
 private:
-    GfxAPI& _gfx {};
+    GraphicsAPI& _graphics {};
     GLFWwindow* _window {nullptr};
 };
 

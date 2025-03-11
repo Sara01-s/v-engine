@@ -6,6 +6,7 @@
 
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#include <fstream>
 #include <optional>
 
 #include "../log.hpp"
@@ -39,31 +40,39 @@ private:
     void
     _init_vulkan() noexcept {
         // Execution order is extremely important, do not modify.
-        _init_vk_instance();
-        _init_surface();
-        _init_physical_device();
-        _init_logical_device();
-        _init_swap_chain();
-        _init_image_views();
+        _create_vk_instance();
+        _create_surface();
+        _create_physical_device();
+        _create_logical_device();
+        _create_swap_chain();
+        _create_image_views();
+        _create_render_pass();
+        _create_graphics_pipeline();
     }
 
     void
-    _init_vk_instance() noexcept;
+    _create_vk_instance() noexcept;
 
     void
-    _init_surface() noexcept;
+    _create_surface() noexcept;
 
     void
-    _init_physical_device() noexcept;
+    _create_physical_device() noexcept;
 
     void
-    _init_logical_device() noexcept;
+    _create_logical_device() noexcept;
 
     void
-    _init_swap_chain() noexcept;
+    _create_swap_chain() noexcept;
 
     void
-    _init_image_views() noexcept;
+    _create_image_views() noexcept;
+
+    void
+    _create_render_pass() noexcept;
+
+    void
+    _create_graphics_pipeline() noexcept;
 
 private:
 #if defined(NDEBUG) || !defined(USE_VALIDATION_LAYERS)
@@ -91,6 +100,29 @@ private:
 
     // Image views.
     std::vector<vk::UniqueImageView> _image_views {};
+
+    // Render Pipeline.
+    vk::UniqueRenderPass _render_pass {nullptr};
+    vk::UniquePipelineLayout _pipeline_Layout {nullptr};
 };
+
+// Helper function to read shader files.
+[[maybe_unused]] static std::vector<c8>
+read_file(std::string const& file_name) noexcept {
+    // Start reading file from the end and read it as binary data.
+    std::ifstream file(file_name, std::ios::ate | std::ios::binary);
+
+    core_assert(file.is_open(), "Failed to open file");
+
+    // Since we started at the end, we can tell the file size :).
+    usize const file_size = static_cast<usize>(file.tellg());
+    std::vector<c8> buffer(file_size);
+
+    file.seekg(0); // Move read pointer to beggining.
+    file.read(buffer.data(), file_size); // Write data to buffer.
+    file.close();
+
+    return buffer;
+}
 
 } // namespace core

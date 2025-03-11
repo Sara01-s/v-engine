@@ -92,7 +92,7 @@ _check_validation_layer_support(
 }
 
 void
-VulkanRenderer::_init_vk_instance() noexcept {
+VulkanRenderer::_create_vk_instance() noexcept {
     u32 version {0};
     vkEnumerateInstanceVersion(&version);
 
@@ -166,7 +166,7 @@ VulkanRenderer::_init_vk_instance() noexcept {
 #pragma region SURFACE
 
 void
-VulkanRenderer::_init_surface() noexcept {
+VulkanRenderer::_create_surface() noexcept {
     VkSurfaceKHR c_surface;
     core_assert(
         glfwCreateWindowSurface(
@@ -379,7 +379,7 @@ _choose_swap_extent(
 }
 
 void
-VulkanRenderer::_init_swap_chain() noexcept {
+VulkanRenderer::_create_swap_chain() noexcept {
     Log::header("Initializing Swap Chain.");
 
     SwapChainSupportInfo swap_chain_info =
@@ -477,7 +477,7 @@ VulkanRenderer::_init_swap_chain() noexcept {
 #pragma region IMAGE_VIEWS
 
 void
-VulkanRenderer::_init_image_views() noexcept {
+VulkanRenderer::_create_image_views() noexcept {
     _image_views.resize(_swap_chain_images.size());
 
     for (usize i {}; i < _swap_chain_images.size(); ++i) {
@@ -620,7 +620,7 @@ _rate_device_suitability(vk::PhysicalDevice const& device) noexcept {
 }
 
 void
-VulkanRenderer::_init_physical_device() noexcept {
+VulkanRenderer::_create_physical_device() noexcept {
     core_assert(_surface.get(), "Surface is nullptr.");
 
     auto [result, physical_devices] = _vk_instance->enumeratePhysicalDevices();
@@ -660,7 +660,7 @@ VulkanRenderer::_init_physical_device() noexcept {
 #pragma region LOGICAL_DEVICE
 
 void
-VulkanRenderer::_init_logical_device() noexcept {
+VulkanRenderer::_create_logical_device() noexcept {
     QueueFamilyIndices const& queue_family_indices =
         _find_queue_families(_physical_device, _surface);
 
@@ -722,4 +722,263 @@ VulkanRenderer::_init_logical_device() noexcept {
 
 #pragma endregion LOGICAL_DEVICE
 
+#pragma region GRAPHICS_PIPELINE
+
+vk::UniqueShaderModule
+_create_shader_module(
+    vk::UniqueDevice const& logical_device,
+    std::vector<c8> const& code
+) {
+    vk::ShaderModuleCreateInfo shader_module_create_info {
+        .codeSize = code.size(),
+        .pCode = reinterpret_cast<u32 const*>(code.data()),
+    };
+
+    auto [result, shader_module] =
+        logical_device->createShaderModuleUnique(shader_module_create_info);
+
+    core_assert(
+        result == vk::Result::eSuccess,
+        "Failed to create shader module"
+    );
+
+    return std::move(shader_module);
+}
+
+void
+VulkanRenderer::_create_render_pass() noexcept {
+    vk::AttachmentDescription const color_attachment {
+        .format = _swap_chain_image_format,
+        .samples = vk::SampleCountFlagBits::e1, // Modify if using multi-sample.
+        // Clear framebuffer to black beofre drawing a new frame.
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        // We want to see the result so store the framebuffer information.
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        // Stencil disabled for now.
+        .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
+        .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
+
+        // We don't care how images come, we'll clear them anyway.
+        .initialLayout = vk::ImageLayout::eUndefined,
+        // But we do care how they come out, in this case, as presentable images :)
+        .finalLayout = vk::ImageLayout::ePresentSrcKHR,
+    };
+
+    // For now we'll declare only one sub-pass.
+    constexpr vk::AttachmentReference color_attachment_ref {
+        .attachment = 0,
+        .layout = vk::ImageLayout::eColorAttachmentOptimal,
+    };
+
+    vk::SubpassDescription const subpass {
+        .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color_attachment_ref
+    };
+
+    vk::RenderPassCreateInfo const render_pass_info {
+        .attachmentCount = 1,
+        .pAttachments = &color_attachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+    };
+
+    auto [result, render_pass] =
+        _logical_device->createRenderPassUnique(render_pass_info);
+
+    core_assert(
+        result == vk::Result::eSuccess,
+        "Failed to create Render Pass."
+    );
+
+    _render_pass = std::move(render_pass);
+}
+
+void
+VulkanRenderer::_create_graphics_pipeline() noexcept {
+    // Set up shaders.
+    auto vert_shader_code = read_file("../../shaders/compiled/basic_vert.spv");
+
+    Log::info("Loaded vert shader code.");
+    Log::sub_info("Size: ", vert_shader_code.size());
+
+    auto frag_shader_code = read_file("../../shaders/compiled/basic_frag.spv");
+
+    Log::info("Loaded frag shader code.");
+    Log::sub_info("Size: ", frag_shader_code.size());
+
+    vk::UniqueShaderModule vert_shader_module =
+        _create_shader_module(_logical_device, vert_shader_code);
+    vk::UniqueShaderModule frag_shader_module =
+        _create_shader_module(_logical_device, vert_shader_code);
+
+    // Shader code is no longer necessary after creating shader modules.
+    vert_shader_code.clear();
+    vert_shader_code.shrink_to_fit();
+    frag_shader_code.clear();
+    frag_shader_code.shrink_to_fit();
+
+    // Create Render Pipeline.
+    vk::PipelineShaderStageCreateInfo const vertex_shader_stage_info {
+        .stage = vk::ShaderStageFlagBits::eVertex,
+        .module = *vert_shader_module,
+        .pName = "main", // Vertex shader code entry point.
+        .pSpecializationInfo = nullptr, // We'll see later.
+    };
+
+    vk::PipelineShaderStageCreateInfo const fragment_shader_stage_info {
+        .stage = vk::ShaderStageFlagBits::eFragment,
+        .module = *frag_shader_module,
+        .pName = "main", // Fragment shader code entry point.
+        .pSpecializationInfo = nullptr, // We'll see later.
+    };
+
+    std::array const shader_stages = {
+        vertex_shader_stage_info,
+        fragment_shader_stage_info,
+    };
+
+    constexpr vk::PipelineVertexInputStateCreateInfo vertex_input_info {
+        .vertexBindingDescriptionCount = 0,
+        .pVertexBindingDescriptions = nullptr,
+        .vertexAttributeDescriptionCount = 0,
+        .pVertexAttributeDescriptions = nullptr,
+    };
+
+    constexpr vk::PipelineInputAssemblyStateCreateInfo input_assembly_info {
+        .topology = vk::PrimitiveTopology::eTriangleList,
+        .primitiveRestartEnable = vk::False,
+    };
+
+    // Viewports define the transformations from vk::Image to framebuffer.
+    vk::Viewport viewport {
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<f32>(_swap_chain_extent.width),
+        .height = static_cast<f32>(_swap_chain_extent.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+
+    // Difference between Viewport and Scissor:
+    // src: https://docs.vulkan.org/tutorial/latest/03_Drawing_a_triangle/02_Graphics_pipeline_basics/02_Fixed_functions.html#:~:text=than%20the%20viewport.-,viewports%20scissors,-So%20if%20we
+    vk::Rect2D scissor {
+        .offset = {0, 0},
+        .extent = _swap_chain_extent,
+    };
+
+    // Pipelines are "immutable", but some part might be modifiable at draw time,
+    // Although this requires explicit implementation.
+    constexpr std::array dynamic_pipeline_states = {
+        vk::DynamicState::eViewport,
+        vk::DynamicState::eScissor,
+    };
+
+    vk::PipelineDynamicStateCreateInfo dynamic_state_info {
+        .dynamicStateCount = static_cast<u32>(dynamic_pipeline_states.size()),
+        .pDynamicStates = dynamic_pipeline_states.data(),
+    };
+
+    vk::PipelineViewportStateCreateInfo const viewport_state_info {
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor,
+    };
+
+    // Rasterizer.
+    constexpr vk::PipelineRasterizationStateCreateInfo rasterizer_info {
+        .depthClampEnable = vk::False, // Discard fragments beyond near/far.
+        .rasterizerDiscardEnable = vk::False, // Geometry is rasterized lol.
+        .polygonMode = vk::PolygonMode::eFill, // Fill polygons with fragments.
+        // Culling.
+        .cullMode = vk::CullModeFlagBits::eBack,
+        .frontFace = vk::FrontFace::eClockwise,
+        // Depth.
+        .depthBiasEnable = vk::False,
+        .depthBiasConstantFactor = 0.0f, // Optional.
+        .depthBiasClamp = 0.0f, // Optional.
+        .depthBiasSlopeFactor = 0.0f, // Optional.
+        .lineWidth = 1.0f,
+    };
+
+    // Multi-sample. ((e.g: for anti-alising)).
+    constexpr vk::PipelineMultisampleStateCreateInfo multi_sampling_info {
+        .rasterizationSamples = vk::SampleCountFlagBits::e1,
+        .sampleShadingEnable = vk::False,
+        .minSampleShading = 1.0f, // Optional.
+        .pSampleMask = nullptr, // Optional.
+        .alphaToCoverageEnable = vk::False, // Optional.
+        .alphaToOneEnable = vk::False, // Optional.
+    };
+
+    // Depth and stencil.
+    // WIP.
+
+    // Color Blending.
+    // (between current image and the one already present in the frame buffer).
+    // Pseudo-code for how this works:
+    /*
+        if (blendEnable) {
+            finalColor.rgb = (srcColorBlendFactor * newColor.rgb) <colorBlendOp> (dstColorBlendFactor * oldColor.rgb);
+            finalColor.a = (srcAlphaBlendFactor * newColor.a) <alphaBlendOp> (dstAlphaBlendFactor * oldColor.a);
+        } else {
+            finalColor = newColor;
+        }
+
+        finalColor = finalColor & colorWriteMask;
+
+    // How Alpha blend works:
+        finalColor.rgb = newAlpha * newColor + (1 - newAlpha) * oldColor;
+        finalColor.a = newAlpha.a;
+    */
+    constexpr vk::PipelineColorBlendAttachmentState color_blend_attachment {
+        .blendEnable = vk::False,
+
+        .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha, // Optional.
+        .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha, // Optional.
+        .colorBlendOp = vk::BlendOp::eAdd, // Optional.
+        .srcAlphaBlendFactor = vk::BlendFactor::eOne, // Optional.
+        .dstAlphaBlendFactor = vk::BlendFactor::eZero, // Optional.
+        .alphaBlendOp = vk::BlendOp::eAdd, // Optional.
+
+        // RGBA.
+        .colorWriteMask = vk::ColorComponentFlagBits::eR |
+            vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+            vk::ColorComponentFlagBits::eA,
+    };
+
+    vk::PipelineColorBlendStateCreateInfo color_blending {
+        .logicOpEnable = vk::False,
+        .logicOp = vk::LogicOp::eCopy, // Optional.
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment,
+    };
+
+    color_blending.blendConstants[0] = 0.0f; // Optional.
+    color_blending.blendConstants[1] = 0.0f; // Optional.
+    color_blending.blendConstants[2] = 0.0f; // Optional.
+    color_blending.blendConstants[3] = 0.0f; // Optional.
+
+    // Pipeline Layout.
+    // Empty for now.
+    constexpr vk::PipelineLayoutCreateInfo pipeline_layout_info {
+        .setLayoutCount = 0, // Optional.
+        .pSetLayouts = nullptr, // Optional.
+        .pushConstantRangeCount = 0, // Optional.
+        .pPushConstantRanges = nullptr, // Optional.
+    };
+
+    auto [result, pipeline_layout] =
+        _logical_device->createPipelineLayoutUnique(pipeline_layout_info);
+
+    core_assert(
+        result == vk::Result::eSuccess,
+        "Failed to create pipeline layout."
+    );
+
+    _pipeline_Layout = std::move(pipeline_layout);
+}
+
+#pragma endregion
 } // namespace core

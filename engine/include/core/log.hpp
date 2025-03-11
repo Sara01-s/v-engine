@@ -313,7 +313,7 @@ private:
     }
 };
 
-static void
+[[maybe_unused]] static void
 core_assert(bool statement, char const* message) noexcept {
     if (statement) {
         return;
