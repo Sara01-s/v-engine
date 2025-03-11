@@ -1,7 +1,9 @@
 #include <core/renderers/vulkan_renderer.hpp>
 
+#include <algorithm> // clamp.
 #include <array>
 #include <cstring> // strcmp.
+#include <limits>
 #include <map> // multipmap.
 #include <set>
 #include <span>
@@ -42,9 +44,9 @@ VulkanRenderer::render() noexcept {
 #pragma region VULKAN_INSTANCE
 
 bool
-VulkanRenderer::_check_validation_layer_support(
+_check_validation_layer_support(
     std::span<char const*> const requested_validation_layers
-) const noexcept {
+) noexcept {
     u32 layer_count {};
 
     vk::Result enumeration_result =
@@ -250,7 +252,7 @@ SwapChainSupportInfo
 _query_swapchain_support(
     vk::PhysicalDevice const& device,
     vk::UniqueSurfaceKHR const& surface
-) {
+) noexcept {
     SwapChainSupportInfo info;
 
     Log::info(
@@ -276,12 +278,6 @@ _query_swapchain_support(
 
     info.formats = std::move(formats);
 
-    Log::sub_info(
-        "Surface formats retrieved: ",
-        info.formats.size(),
-        " formats available."
-    );
-
     for (const auto& format : info.formats) {
         Log::sub_info(
             (usize)2,
@@ -303,11 +299,177 @@ _query_swapchain_support(
         " modes available."
     );
 
-    for (const auto& present_mode : info.present_modes) {
-        Log::sub_info((usize)2, "Present Mode: ", vk::to_string(present_mode));
+    return info;
+}
+
+vk::SurfaceFormatKHR
+_choose_swap_surface_format(
+    std::vector<vk::SurfaceFormatKHR> const& available_formats
+) noexcept {
+    // If this fails, we could rank the formats and return the best one.
+    for (auto const& available_format : available_formats) {
+        Log::info(
+            "Checking available format: ",
+            vk::to_string(available_format.format),
+            ", ColorSpace: ",
+            vk::to_string(available_format.colorSpace)
+        );
+
+        if (available_format.format == vk::Format::eB8G8R8A8Srgb &&
+            available_format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
+            return available_format;
+        }
     }
 
-    return info;
+    return available_formats[0];
+}
+
+vk::PresentModeKHR
+_choose_swap_present_mode(
+    std::vector<vk::PresentModeKHR> const& available_present_modes
+) noexcept {
+    //
+    for (auto const& present_mode : available_present_modes) {
+        // Recommended default.
+        // src: https://docs.vulkan.org/tutorial/latest/03_Drawing_a_triangle/01_Presentation/01_Swap_chain.html#_enabling_device_extensions:~:text=personally%20think%20that-,VK_PRESENT_MODE_MAILBOX_KHR,-is%20a%20very
+        if (present_mode == vk::PresentModeKHR::eMailbox) {
+            return present_mode;
+        }
+    }
+
+    return vk::PresentModeKHR::eFifo; // Guaranteed to be available.
+    // src: https://docs.vulkan.org/tutorial/latest/03_Drawing_a_triangle/01_Presentation/01_Swap_chain.html#_enabling_device_extensions:~:text=VK_PRESENT_MODE_FIFO_KHR%20mode%20is%20guaranteed%20to%20be%20available
+}
+
+vk::Extent2D
+_choose_swap_extent(
+    vk::SurfaceCapabilitiesKHR const& capabilities,
+    GLFWwindow* const window
+) noexcept {
+    // Swap extent is the resolution of the swap chain images (in px).
+    if (capabilities.currentExtent.width != std::numeric_limits<u32>::max()) {
+        return capabilities.currentExtent;
+    }
+
+    int width {}, height {};
+    glfwGetFramebufferSize(window, &width, &height);
+
+    // Convert to u32.
+    vk::Extent2D actual_extent = {
+        static_cast<u32>(width),
+        static_cast<u32>(height)
+    };
+
+    u32 clamped_width = std::clamp(
+        actual_extent.width,
+        capabilities.minImageExtent.width,
+        capabilities.maxImageExtent.width
+    );
+
+    u32 clamped_height = std::clamp(
+        actual_extent.height,
+        capabilities.minImageExtent.height,
+        capabilities.maxImageExtent.height
+    );
+
+    actual_extent.setWidth(clamped_width);
+    actual_extent.setHeight(clamped_height);
+
+    return actual_extent;
+}
+
+void
+VulkanRenderer::_init_swap_chain() noexcept {
+    Log::header("Initializing Swap Chain.");
+
+    SwapChainSupportInfo swap_chain_info =
+        _query_swapchain_support(_physical_device, _surface);
+
+    vk::SurfaceFormatKHR surface_format =
+        _choose_swap_surface_format(swap_chain_info.formats);
+    Log::info("Chosen surface format: ", vk::to_string(surface_format.format));
+
+    vk::PresentModeKHR present_mode =
+        _choose_swap_present_mode(swap_chain_info.present_modes);
+    Log::info("Chosen present mode: ", vk::to_string(present_mode));
+
+    vk::Extent2D extent =
+        _choose_swap_extent(swap_chain_info.capabilities, _window);
+    Log::info("Chosen swap extent: ", extent.width, "x", extent.height);
+
+    u32 image_count = swap_chain_info.capabilities.minImageCount + 1;
+    u32 const max_image_count = swap_chain_info.capabilities.maxImageCount;
+
+    if (max_image_count > 0 && image_count > max_image_count) {
+        image_count = max_image_count;
+    }
+    Log::info("Image count: ", image_count);
+
+    vk::SwapchainCreateInfoKHR swap_chain_create_info {
+        .surface = *_surface,
+        .minImageCount = image_count,
+        .imageFormat = surface_format.format,
+        .imageColorSpace = surface_format.colorSpace,
+        .imageExtent = extent,
+        .imageArrayLayers = 1,
+        .imageUsage = vk::ImageUsageFlagBits::eColorAttachment
+    };
+
+    QueueFamilyIndices indices =
+        _find_queue_families(_physical_device, _surface);
+    u32 const queue_family_indices[] = {
+        indices.graphics_family.value(),
+        indices.present_family.value()
+    };
+
+    if (indices.graphics_family != indices.present_family) {
+        swap_chain_create_info.imageSharingMode = vk::SharingMode::eConcurrent;
+        swap_chain_create_info.queueFamilyIndexCount = 2;
+        swap_chain_create_info.pQueueFamilyIndices = queue_family_indices;
+        Log::info("Using concurrent sharing mode for swap chain images.");
+    } else {
+        swap_chain_create_info.imageSharingMode = vk::SharingMode::eExclusive;
+        swap_chain_create_info.queueFamilyIndexCount = 0;
+        swap_chain_create_info.pQueueFamilyIndices = nullptr;
+        Log::info("Using exclusive sharing mode for swap chain images.");
+    }
+
+    swap_chain_create_info.preTransform =
+        swap_chain_info.capabilities.currentTransform;
+    swap_chain_create_info.compositeAlpha =
+        vk::CompositeAlphaFlagBitsKHR::eOpaque;
+    swap_chain_create_info.presentMode = present_mode;
+    swap_chain_create_info.clipped = vk::True;
+    swap_chain_create_info.oldSwapchain = nullptr;
+
+    core_assert(
+        _logical_device.get(),
+        "Device is nullptr, please initialize it."
+    );
+    auto [result, swap_chain] =
+        _logical_device.get().createSwapchainKHRUnique(swap_chain_create_info);
+
+    core_assert(result == vk::Result::eSuccess, "Failed to create Swap Chain");
+    _swap_chain = std::move(swap_chain);
+
+    Log::info(Log::LIGHT_GREEN, "Swap Chain successfully created.");
+
+    // Retrieve images.
+    auto [result2, images] =
+        _logical_device->getSwapchainImagesKHR(*_swap_chain);
+
+    core_assert(
+        result2 == vk::Result::eSuccess,
+        "Failed to retrieve swap chain images."
+    );
+
+    Log::info("Retrieved (", images.size(), ") swap chain images.");
+
+    _swap_chain_images = std::move(images);
+
+    // Store swap chain state.
+    _swap_chain_format = surface_format.format;
+    _swap_chain_extent = extent;
 }
 
 #pragma endregion SWAP_CHAIN
@@ -364,8 +526,8 @@ _is_device_suitable(
         SwapChainSupportInfo swap_chain_info =
             _query_swapchain_support(device, surface);
 
-        swap_chain_adequate = !swap_chain_info.formats.empty()
-            && !swap_chain_info.present_modes.empty();
+        swap_chain_adequate = !swap_chain_info.formats.empty() &&
+            !swap_chain_info.present_modes.empty();
     }
 
     bool suitable =
@@ -419,7 +581,7 @@ _rate_device_suitability(vk::PhysicalDevice const& device) noexcept {
 }
 
 void
-VulkanRenderer::_pick_physical_device() noexcept {
+VulkanRenderer::_init_physical_device() noexcept {
     core_assert(_surface.get(), "Surface is nullptr.");
 
     u32 device_count {0};
@@ -503,16 +665,20 @@ VulkanRenderer::_init_logical_device() noexcept {
         "Failed to create Logical Device"
     );
 
-    _device = std::move(device);
+    _logical_device = std::move(device);
     Log::info(Log::LIGHT_GREEN, "Logical Device successfully created.");
 
     // Create queues.
-    _graphics_queue =
-        _device->getQueue(queue_family_indices.graphics_family.value(), 0x0);
+    _graphics_queue = _logical_device->getQueue(
+        queue_family_indices.graphics_family.value(),
+        0x0
+    );
     Log::sub_info("Graphics queue created: ", _graphics_queue);
 
-    _present_queue =
-        _device->getQueue(queue_family_indices.present_family.value(), 0x0);
+    _present_queue = _logical_device->getQueue(
+        queue_family_indices.present_family.value(),
+        0x0
+    );
     Log::sub_info("Present queue created: ", _present_queue);
 }
 

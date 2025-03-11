@@ -22,7 +22,8 @@ AlwaysBreakBeforeMultilineStrings: true
 AlwaysBreakTemplateDeclarations: Yes
 BinPackArguments: false
 BinPackParameters: false
-BreakBeforeBinaryOperators: NonAssignment
+# Cambiar para mantener el operador al final de la línea
+BreakBeforeBinaryOperators: None
 BreakBeforeBraces: Attach
 BreakBeforeTernaryOperators: true
 BreakConstructorInitializers: AfterColon
