@@ -479,7 +479,7 @@ VulkanRenderer::_create_swap_chain() noexcept {
 
 void
 VulkanRenderer::_create_image_views() noexcept {
-    _image_views.resize(_swap_chain_images.size());
+    _swap_chain_image_views.resize(_swap_chain_images.size());
 
     for (usize i {}; i < _swap_chain_images.size(); ++i) {
         vk::ImageViewCreateInfo image_view_create_info {
@@ -510,7 +510,7 @@ VulkanRenderer::_create_image_views() noexcept {
             "Failed to create unique image view."
         );
 
-        _image_views[i] = std::move(image_view);
+        _swap_chain_image_views[i] = std::move(image_view);
     }
 }
 
@@ -800,16 +800,18 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     Log::header("Creating Graphics Pipeline.");
 
     // Set up shaders.
-    // FIXME - ADD RELATIVE PATHS.
-    auto vert_shader_code = read_file(
-        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_vert.spv"
+    // FIXME - Use better filepath finder.
+    std::filesystem::path const vert_filepath = std::filesystem::canonical(
+        "../../engine/shaders/compiled/basic_vert.spv"
     );
+    auto vert_shader_code = read_file(vert_filepath.string());
     Log::info("Loaded vert shader code.");
     Log::sub_info("Size: ", vert_shader_code.size());
 
-    auto frag_shader_code = read_file(
-        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_frag.spv"
+    std::filesystem::path const frag_filepath = std::filesystem::canonical(
+        "../../engine/shaders/compiled/basic_frag.spv"
     );
+    auto frag_shader_code = read_file(frag_filepath.string());
     Log::info("Loaded frag shader code.");
     Log::sub_info("Size: ", frag_shader_code.size());
 
@@ -1033,4 +1035,37 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
 }
 
 #pragma endregion
+
+#pragma region FRAMEBUFFERS
+
+void
+VulkanRenderer::_create_framebuffers() noexcept {
+    _swap_chain_framebuffers.resize(_swap_chain_image_views.size());
+
+    for (usize i {}; i < _swap_chain_image_views.size(); ++i) {
+        std::array const attachments = {*_swap_chain_image_views[i]};
+
+        vk::FramebufferCreateInfo const framebuffer_info {
+            .renderPass = *_render_pass,
+            .attachmentCount = 1,
+            .pAttachments = attachments.data(),
+            .width = _swap_chain_extent.width,
+            .height = _swap_chain_extent.height,
+            .layers = 1,
+        };
+
+        auto [result, framebuffer] =
+            _logical_device->createFramebufferUnique(framebuffer_info);
+
+        core_assert(
+            result == vk::Result::eSuccess,
+            "Failed to create Framebuffer"
+        );
+
+        _swap_chain_framebuffers[i] = std::move(framebuffer);
+    }
+}
+
+#pragma endregion FRAMEBUFFERS
+
 } // namespace core

@@ -48,6 +48,7 @@ private:
         _create_image_views();
         _create_render_pass();
         _create_graphics_pipeline();
+        _create_framebuffers();
     }
 
     void
@@ -74,6 +75,9 @@ private:
     void
     _create_graphics_pipeline() noexcept;
 
+    void
+    _create_framebuffers() noexcept;
+
 private:
 #if defined(NDEBUG) || !defined(USE_VALIDATION_LAYERS)
     static constexpr bool s_enable_validation_layers {false};
@@ -99,12 +103,15 @@ private:
     vk::Extent2D _swap_chain_extent {};
 
     // Image views.
-    std::vector<vk::UniqueImageView> _image_views {};
+    std::vector<vk::UniqueImageView> _swap_chain_image_views {};
 
     // Render Pipeline.
     vk::UniqueRenderPass _render_pass {nullptr};
     vk::UniquePipelineLayout _pipeline_Layout {nullptr};
-    vk::UniquePipeline _graphics_pipeline;
+    vk::UniquePipeline _graphics_pipeline {};
+
+    // Framebuffer.
+    std::vector<vk::UniqueFramebuffer> _swap_chain_framebuffers {};
 };
 
 // Helper function to read shader files.
