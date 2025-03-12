@@ -3,6 +3,7 @@
 #include <algorithm> // clamp.
 #include <array>
 #include <cstring> // strcmp.
+#include <filesystem>
 #include <limits>
 #include <map> // multipmap.
 #include <set>
@@ -796,21 +797,29 @@ VulkanRenderer::_create_render_pass() noexcept {
 
 void
 VulkanRenderer::_create_graphics_pipeline() noexcept {
-    // Set up shaders.
-    auto vert_shader_code = read_file("../../shaders/compiled/basic_vert.spv");
+    Log::header("Creating Graphics Pipeline.");
 
+    // Set up shaders.
+    // FIXME - ADD RELATIVE PATHS.
+    auto vert_shader_code = read_file(
+        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_vert.spv"
+    );
     Log::info("Loaded vert shader code.");
     Log::sub_info("Size: ", vert_shader_code.size());
 
-    auto frag_shader_code = read_file("../../shaders/compiled/basic_frag.spv");
-
+    auto frag_shader_code = read_file(
+        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_frag.spv"
+    );
     Log::info("Loaded frag shader code.");
     Log::sub_info("Size: ", frag_shader_code.size());
 
     vk::UniqueShaderModule vert_shader_module =
         _create_shader_module(_logical_device, vert_shader_code);
+    Log::info("Vertex shader module created.");
+
     vk::UniqueShaderModule frag_shader_module =
-        _create_shader_module(_logical_device, vert_shader_code);
+        _create_shader_module(_logical_device, frag_shader_code);
+    Log::info("Fragment shader module created.");
 
     // Shader code is no longer necessary after creating shader modules.
     vert_shader_code.clear();
@@ -978,6 +987,49 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     );
 
     _pipeline_Layout = std::move(pipeline_layout);
+    Log::info("Pipeline layout created.");
+
+    // FINALLY... IT'S ALIVE!!! THE RENDER PIPELINE!!!
+    vk::GraphicsPipelineCreateInfo const graphics_pipeline_info {
+        // Shader stages.
+        .stageCount = 2, // Vertex and fragment.
+        .pStages = shader_stages.data(),
+
+        // Fixed-function stage.
+        .pVertexInputState = &vertex_input_info,
+        .pInputAssemblyState = &input_assembly_info,
+        .pViewportState = &viewport_state_info,
+        .pRasterizationState = &rasterizer_info,
+        .pMultisampleState = &multi_sampling_info,
+        .pDepthStencilState = nullptr, // Optional.
+        .pColorBlendState = &color_blending,
+        .pDynamicState = &dynamic_state_info,
+
+        // Pipeline layout.
+        .layout = *_pipeline_Layout,
+
+        // Render pass.
+        .renderPass = *_render_pass,
+        .subpass = 0, // Index of the sub-pass, there is one so: zero.
+
+        // Pipelines derivatives (fully optional).
+        .basePipelineHandle = nullptr, // Optional.
+        .basePipelineIndex = -1, // Optional.
+    };
+
+    auto [result2, graphics_pipeline] =
+        _logical_device->createGraphicsPipelineUnique(
+            nullptr, // Pipeline Cache.
+            graphics_pipeline_info
+        );
+
+    core_assert(
+        result2 == vk::Result::eSuccess,
+        "Failed to create Graphics Pipeline."
+    );
+
+    _graphics_pipeline = std::move(graphics_pipeline);
+    Log::info(Log::LIGHT_GREEN, "Graphics Pipeline successfully created.");
 }
 
 #pragma endregion

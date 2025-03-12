@@ -104,6 +104,7 @@ private:
     // Render Pipeline.
     vk::UniqueRenderPass _render_pass {nullptr};
     vk::UniquePipelineLayout _pipeline_Layout {nullptr};
+    vk::UniquePipeline _graphics_pipeline;
 };
 
 // Helper function to read shader files.
