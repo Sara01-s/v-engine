@@ -314,14 +314,14 @@ private:
 };
 
 [[maybe_unused]] static void
-core_assert(bool statement, char const* message) noexcept {
+v_assert(bool statement, char const* message) noexcept {
     if (statement) {
         return;
     }
 
-    Log::error("Assertion failed: ", message);
+    Log::error(__FILE__, __LINE__, "Assertion failed: ", message);
 
-#if NDEBUG // Release mode.
+#if defined(NDEBUG) // Release mode.
     exit(EXIT_FAILURE);
 #else
     assert(0);

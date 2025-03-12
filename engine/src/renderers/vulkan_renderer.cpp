@@ -10,6 +10,9 @@
 #include <span>
 
 namespace core {
+
+static constexpr vk::Result s_success = vk::Result::eSuccess;
+static constexpr u32 s_max_frames_in_flight = 2;
 static constexpr std::array s_physical_device_extensions {
     vk::KHRSwapchainExtensionName
 };
@@ -36,6 +39,7 @@ VulkanRenderer::render() noexcept {
     Log::header("Starting render loop.");
     while (!glfwWindowShouldClose(_window)) {
         glfwPollEvents();
+        _draw_frame();
     }
     Log::info("Render loop terminated.");
 }
@@ -53,8 +57,8 @@ _check_validation_layer_support(
     vk::Result enumeration_result =
         vk::enumerateInstanceLayerProperties(&layer_count, nullptr);
 
-    core_assert(
-        enumeration_result == vk::Result::eSuccess,
+    v_assert(
+        enumeration_result == s_success,
         "Failed to enumerate instance layer properties count."
     );
 
@@ -65,8 +69,8 @@ _check_validation_layer_support(
         available_layers.data()
     );
 
-    core_assert(
-        initialization_result == vk::Result::eSuccess,
+    v_assert(
+        initialization_result == s_success,
         "Failed to initialize instance layer properties."
     );
 
@@ -141,7 +145,7 @@ VulkanRenderer::_create_vk_instance() noexcept {
     if constexpr (s_enable_validation_layers) {
         std::array requested_layers = {"VK_LAYER_KHRONOS_validation"};
 
-        core_assert(
+        v_assert(
             _check_validation_layer_support(requested_layers),
             "Validation layers requested but not available, please install them."
         );
@@ -153,10 +157,7 @@ VulkanRenderer::_create_vk_instance() noexcept {
 
     auto [result, instance] = vk::createInstanceUnique(instance_create_info);
 
-    core_assert(
-        result == vk::Result::eSuccess,
-        "Failed to create VK Instance."
-    );
+    v_assert(result == s_success, "Failed to create VK Instance.");
 
     _vk_instance = std::move(instance);
     Log::info(Log::LIGHT_GREEN, "Vulkan Instance successfully created.");
@@ -169,7 +170,7 @@ VulkanRenderer::_create_vk_instance() noexcept {
 void
 VulkanRenderer::_create_surface() noexcept {
     VkSurfaceKHR c_surface;
-    core_assert(
+    v_assert(
         glfwCreateWindowSurface(
             _vk_instance.get(),
             _window,
@@ -224,10 +225,7 @@ _find_queue_families(
             surface.get()
         );
 
-        core_assert(
-            result == vk::Result::eSuccess,
-            "Failed to check surface support"
-        );
+        v_assert(result == s_success, "Failed to check surface support");
 
         if (supported) {
             indices.present_family = i;
@@ -262,20 +260,14 @@ _query_swapchain_support(
     );
 
     auto [result1, capabilities] = device.getSurfaceCapabilitiesKHR(*surface);
-    core_assert(
-        result1 == vk::Result::eSuccess,
-        "Failed to get surface capabilities"
-    );
+    v_assert(result1 == s_success, "Failed to get surface capabilities");
 
     info.capabilities = capabilities;
 
     Log::sub_info("Surface capabilities retrieved.");
 
     auto [result2, formats] = device.getSurfaceFormatsKHR(*surface);
-    core_assert(
-        result2 == vk::Result::eSuccess,
-        "Failed to get surface formats"
-    );
+    v_assert(result2 == s_success, "Failed to get surface formats");
 
     info.formats = std::move(formats);
 
@@ -290,7 +282,7 @@ _query_swapchain_support(
     }
 
     auto [result3, present_modes] = device.getSurfacePresentModesKHR(*surface);
-    core_assert(result3 == vk::Result::eSuccess, "Failed to get present modes");
+    v_assert(result3 == s_success, "Failed to get present modes");
 
     info.present_modes = std::move(present_modes);
 
@@ -443,14 +435,11 @@ VulkanRenderer::_create_swap_chain() noexcept {
     swap_chain_create_info.clipped = vk::True;
     swap_chain_create_info.oldSwapchain = nullptr;
 
-    core_assert(
-        _logical_device.get(),
-        "Device is nullptr, please initialize it."
-    );
+    v_assert(_logical_device.get(), "Device is nullptr, please initialize it.");
     auto [result, swap_chain] =
         _logical_device.get().createSwapchainKHRUnique(swap_chain_create_info);
 
-    core_assert(result == vk::Result::eSuccess, "Failed to create Swap Chain");
+    v_assert(result == s_success, "Failed to create Swap Chain");
     _swap_chain = std::move(swap_chain);
 
     Log::info(Log::LIGHT_GREEN, "Swap Chain successfully created.");
@@ -459,10 +448,7 @@ VulkanRenderer::_create_swap_chain() noexcept {
     auto [result2, images] =
         _logical_device->getSwapchainImagesKHR(*_swap_chain);
 
-    core_assert(
-        result2 == vk::Result::eSuccess,
-        "Failed to retrieve swap chain images."
-    );
+    v_assert(result2 == s_success, "Failed to retrieve swap chain images.");
 
     Log::info("Retrieved (", images.size(), ") swap chain images.");
 
@@ -505,10 +491,7 @@ VulkanRenderer::_create_image_views() noexcept {
         auto [result, image_view] =
             _logical_device->createImageViewUnique(image_view_create_info);
 
-        core_assert(
-            result == vk::Result::eSuccess,
-            "Failed to create unique image view."
-        );
+        v_assert(result == s_success, "Failed to create unique image view.");
 
         _swap_chain_image_views[i] = std::move(image_view);
     }
@@ -523,8 +506,8 @@ _check_device_extension_support(vk::PhysicalDevice const& device) {
     auto [result, available_extensions] =
         device.enumerateDeviceExtensionProperties();
 
-    core_assert(
-        result == vk::Result::eSuccess,
+    v_assert(
+        result == s_success,
         "Failed to get physical device extension properties."
     );
 
@@ -622,14 +605,11 @@ _rate_device_suitability(vk::PhysicalDevice const& device) noexcept {
 
 void
 VulkanRenderer::_create_physical_device() noexcept {
-    core_assert(_surface.get(), "Surface is nullptr.");
+    v_assert(_surface.get(), "Surface is nullptr.");
 
     auto [result, physical_devices] = _vk_instance->enumeratePhysicalDevices();
 
-    core_assert(
-        result == vk::Result::eSuccess,
-        "Failed to find GPUs with Vulkan support."
-    );
+    v_assert(result == s_success, "Failed to find GPUs with Vulkan support.");
 
     Log::info("Found (", physical_devices.size(), ") Physical devices:");
     for (auto const& device : physical_devices) {
@@ -641,7 +621,7 @@ VulkanRenderer::_create_physical_device() noexcept {
         }
     }
 
-    core_assert(_physical_device, "Failed to find a suitable GPU.");
+    v_assert(_physical_device, "Failed to find a suitable GPU.");
 
     std::multimap<u32, vk::PhysicalDevice> candidates {};
 
@@ -650,7 +630,7 @@ VulkanRenderer::_create_physical_device() noexcept {
         candidates.insert(std::make_pair(score, device));
     }
 
-    core_assert(candidates.rbegin()->first > 0, "Failed to rate GPUs.");
+    v_assert(candidates.rbegin()->first > 0, "Failed to rate GPUs.");
 
     _physical_device = candidates.rbegin()->second;
     Log::info(Log::LIGHT_GREEN, "Physical Device successfully selected.");
@@ -699,10 +679,7 @@ VulkanRenderer::_create_logical_device() noexcept {
     auto [result, device] =
         _physical_device.createDeviceUnique(device_create_info);
 
-    core_assert(
-        result == vk::Result::eSuccess,
-        "Failed to create Logical Device"
-    );
+    v_assert(result == s_success, "Failed to create Logical Device");
 
     _logical_device = std::move(device);
     Log::info(Log::LIGHT_GREEN, "Logical Device successfully created.");
@@ -738,10 +715,7 @@ _create_shader_module(
     auto [result, shader_module] =
         logical_device->createShaderModuleUnique(shader_module_create_info);
 
-    core_assert(
-        result == vk::Result::eSuccess,
-        "Failed to create shader module"
-    );
+    v_assert(result == s_success, "Failed to create shader module");
 
     return std::move(shader_module);
 }
@@ -777,20 +751,29 @@ VulkanRenderer::_create_render_pass() noexcept {
         .pColorAttachments = &color_attachment_ref
     };
 
+    constexpr vk::SubpassDependency subpass_dependency {
+        // SubpassExternal: Implicit subpass before or after the render pass.
+        .srcSubpass = vk::SubpassExternal,
+        .dstSubpass = 0,
+
+        // Wait for this operations to occur.
+        .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+    };
+
     vk::RenderPassCreateInfo const render_pass_info {
         .attachmentCount = 1,
         .pAttachments = &color_attachment,
         .subpassCount = 1,
         .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &subpass_dependency,
     };
 
     auto [result, render_pass] =
         _logical_device->createRenderPassUnique(render_pass_info);
 
-    core_assert(
-        result == vk::Result::eSuccess,
-        "Failed to create Render Pass."
-    );
+    v_assert(result == s_success, "Failed to create Render Pass.");
 
     _render_pass = std::move(render_pass);
 }
@@ -800,18 +783,16 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     Log::header("Creating Graphics Pipeline.");
 
     // Set up shaders.
-    // FIXME - Use better filepath finder.
-    std::filesystem::path const vert_filepath = std::filesystem::canonical(
-        "../../engine/shaders/compiled/basic_vert.spv"
+    // FIXME - Use non-harcode absolute filepath.
+    auto vert_shader_code = read_file(
+        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_vert.spv"
     );
-    auto vert_shader_code = read_file(vert_filepath.string());
     Log::info("Loaded vert shader code.");
     Log::sub_info("Size: ", vert_shader_code.size());
 
-    std::filesystem::path const frag_filepath = std::filesystem::canonical(
-        "../../engine/shaders/compiled/basic_frag.spv"
+    auto frag_shader_code = read_file(
+        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_frag.spv"
     );
-    auto frag_shader_code = read_file(frag_filepath.string());
     Log::info("Loaded frag shader code.");
     Log::sub_info("Size: ", frag_shader_code.size());
 
@@ -983,10 +964,7 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     auto [result, pipeline_layout] =
         _logical_device->createPipelineLayoutUnique(pipeline_layout_info);
 
-    core_assert(
-        result == vk::Result::eSuccess,
-        "Failed to create pipeline layout."
-    );
+    v_assert(result == s_success, "Failed to create pipeline layout.");
 
     _pipeline_Layout = std::move(pipeline_layout);
     Log::info("Pipeline layout created.");
@@ -1025,10 +1003,7 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
             graphics_pipeline_info
         );
 
-    core_assert(
-        result2 == vk::Result::eSuccess,
-        "Failed to create Graphics Pipeline."
-    );
+    v_assert(result2 == s_success, "Failed to create Graphics Pipeline.");
 
     _graphics_pipeline = std::move(graphics_pipeline);
     Log::info(Log::LIGHT_GREEN, "Graphics Pipeline successfully created.");
@@ -1057,15 +1032,300 @@ VulkanRenderer::_create_framebuffers() noexcept {
         auto [result, framebuffer] =
             _logical_device->createFramebufferUnique(framebuffer_info);
 
-        core_assert(
-            result == vk::Result::eSuccess,
-            "Failed to create Framebuffer"
-        );
+        v_assert(result == s_success, "Failed to create Framebuffer");
 
         _swap_chain_framebuffers[i] = std::move(framebuffer);
     }
 }
 
 #pragma endregion FRAMEBUFFERS
+
+#pragma region COMMANDS
+
+void
+VulkanRenderer::_create_command_pool() noexcept {
+    Log::header("Creating Command Pool.");
+
+    QueueFamilyIndices const queue_family_indices =
+        _find_queue_families(_physical_device, _surface);
+
+    vk::CommandPoolCreateInfo const cmd_pool_info {
+        // Allow command buffers to be re-recorded individually.
+        .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+        // We'll record graphics commands and submit them to the respective queue.
+        .queueFamilyIndex = queue_family_indices.graphics_family.value(),
+    };
+
+    auto [result, cmd_pool] =
+        _logical_device->createCommandPoolUnique(cmd_pool_info);
+
+    v_assert(result == s_success, "Failed to create Cmd Pool.");
+    _command_pool = std::move(cmd_pool);
+
+    Log::info(Log::LIGHT_GREEN, "Command Pool successfully created.");
+}
+
+void
+VulkanRenderer::_create_command_buffer() noexcept {
+    Log::header("Creating Command Buffer.");
+
+    vk::CommandBufferAllocateInfo cmd_alloc_info {
+        .commandPool = *_command_pool,
+        // Primary: Can be submitted to queues, but not called from other cmd buffers.
+        // Secondary: Cannot be submitted to queues, but can be call from a primery cmd buffer.
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    };
+
+    auto [result, cmd_buffers] =
+        _logical_device->allocateCommandBuffersUnique(cmd_alloc_info);
+
+    v_assert(result == s_success, "Failed to allocate Command Buffer.");
+
+    _command_buffer = std::move(cmd_buffers[0]);
+
+    Log::info(Log::LIGHT_GREEN, "Command Buffer successfully created.");
+}
+
+void
+VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
+    Log::header("Recording Command Buffer.");
+
+    constexpr vk::CommandBufferBeginInfo begin_info {
+        // Possible Flags:
+        // vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+        //      -> cmd buffer is re-recorded after execution.
+        // vk::CommandBufferUsageFlagBits::ePassContinue
+        //      -> used for secondary cmd buffers.
+        // vk::CommandBufferUsageFlagBits::eSimultaneousUse
+        //      -> cmd buffer can be re-submitted while execution is pending.
+        .flags = {}, // Optional.
+
+        // Used for secondary cmd buffers, they can inherit state from primary cmds.
+        .pInheritanceInfo = nullptr, // Optional.
+    };
+
+    auto result_begin = _command_buffer->begin(begin_info);
+    v_assert(result_begin == s_success, "Failed to begin cmd record");
+
+    Log::info("Command Buffer recording started.");
+
+    constexpr vk::ClearValue clear_value {
+        vk::ClearColorValue {std::array {0.0f, 0.05f, 0.1f, 1.0f}}
+    };
+
+    // Start a render pass.
+    vk::RenderPassBeginInfo const render_pass_begin_info {
+        .renderPass = *_render_pass,
+        .framebuffer = *_swap_chain_framebuffers[image_index],
+        .renderArea =
+            {
+                .offset = {0, 0},
+                .extent = {_swap_chain_extent},
+            },
+
+        // Clear color.
+        .clearValueCount = 1,
+        .pClearValues = &clear_value,
+    };
+
+    _command_buffer->beginRenderPass(
+        render_pass_begin_info,
+        vk::SubpassContents::eInline // For primary commands.
+    );
+
+    Log::info("Render pass started.");
+
+    // Let's start drawing!
+    // Note: All vkCmds return void.
+
+    // Bind graphics pipeline.
+    _command_buffer->bindPipeline(
+        vk::PipelineBindPoint::eGraphics,
+        *_graphics_pipeline
+    );
+
+    Log::info("Graphics pipeline bound.");
+
+    // Viewport and scissor are dynamic pipeline states :D
+    vk::Viewport viewport {
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<f32>(_swap_chain_extent.width),
+        .height = static_cast<f32>(_swap_chain_extent.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0,
+    };
+
+    constexpr u32 first_viewport {0};
+    _command_buffer->setViewport(first_viewport, viewport);
+
+    Log::info("Viewport set.");
+
+    vk::Rect2D scissor {
+        .offset = {0, 0},
+        .extent = _swap_chain_extent,
+    };
+
+    constexpr u32 first_scissor {0};
+    _command_buffer->setScissor(first_scissor, scissor);
+
+    Log::info("Scissor set.");
+
+    // D-D-D-Draaaaaaaawww!!!!!!
+    constexpr u32 vertex_count {3};
+    constexpr u32 instance_count {3};
+    constexpr u32 first_vertex {0}; // Defines min value of gl_VertexIndex.
+    constexpr u32 first_instance {0};
+
+    _command_buffer
+        ->draw(vertex_count, instance_count, first_vertex, first_instance);
+
+    Log::info("Draw command issued.");
+
+    // End.
+    _command_buffer->endRenderPass();
+    auto result_end = _command_buffer->end();
+    v_assert(result_end == s_success, "Failed to record cmd buffer.");
+
+    Log::info(Log::LIGHT_GREEN, "Command Buffer recording completed.");
+}
+
+#pragma endregion COMMANDS
+
+#pragma region SYNC_OBJECTS
+
+void
+VulkanRenderer::_create_sync_objects() noexcept {
+    constexpr vk::SemaphoreCreateInfo semaphore_info {};
+    constexpr vk::FenceCreateInfo fence_info {
+        // Fence is "open" by default.
+        // This is because in the first frame of the program we do not want
+        // to wait for this fence to be signaled since no frame will be redendering.
+        .flags = vk::FenceCreateFlagBits::eSignaled,
+    };
+
+    auto [result1, image_available_semaphore] =
+        _logical_device->createSemaphoreUnique(semaphore_info);
+    v_assert(
+        result1 == s_success,
+        "Failed to create Image Available Semaphore."
+    );
+
+    auto [result2, render_finished_semaphore] =
+        _logical_device->createSemaphoreUnique(semaphore_info);
+    v_assert(
+        result2 == s_success,
+        "Failed to create Render Finished Semaphore."
+    );
+
+    _image_available_semaphore = std::move(image_available_semaphore);
+    _render_finished_semapahore = std::move(render_finished_semaphore);
+
+    auto [result3, frame_in_flight_fence] =
+        _logical_device->createFenceUnique(fence_info);
+    v_assert(result3 == s_success, "Failed to create Frame In Flight Fence");
+
+    _frame_in_flight_fence = std::move(frame_in_flight_fence);
+};
+
+#pragma endregion SYNC_OBJECTS
+
+#pragma region DRAW
+
+void
+VulkanRenderer::_draw_frame() noexcept {
+    // Rendering a frame consists in:
+    // - Wait for the previous frame to finish.
+    // - Acquire an image from the swap chain.
+    // - Record a command buffer which draws the scene onto that image.
+    // - Submit the recorded command buffer.
+    // - Present the swap chain image.
+
+    // Synchronization.
+    // All function calls to the GPU are processed asynchronously,
+    // so we must explicity tell Vulkan the order of execution of:
+    // - Acquire an image from the swap chain
+    // - Execute commands that draw onto the acquired image
+    // - Present that image to the screen for presentation, returning it to the swapchain.
+
+    // One option for *GPU (Device)* synchronization: Semaphores (Binary in this case).
+    // src: https://docs.vulkan.org/tutorial/latest/03_Drawing_a_triangle/03_Drawing/02_Rendering_and_presentation.html#:~:text=the%20desired%20ordering.-,Semaphores,-A%20semaphore%20is
+
+    // One option for *CPU (Host)* synchronization: Fences.
+    // src: https://docs.vulkan.org/tutorial/latest/03_Drawing_a_triangle/03_Drawing/02_Rendering_and_presentation.html#:~:text=will%20now%20describe.-,Fences,-A%20fence%20has
+
+    // Wait for current frame to finish rendering.
+    // Obviously first frame won't be waited because fence is signaled (open)
+    // in first frame.
+    constexpr vk::Bool32 wait_for_all {vk::True};
+    constexpr u64 time_out_ns {std::numeric_limits<u64>::max()};
+    auto result_wait = _logical_device->waitForFences(
+        *_frame_in_flight_fence,
+        wait_for_all,
+        time_out_ns
+    );
+    v_assert(
+        result_wait == s_success,
+        "Failed to wait for frame in flight fence."
+    );
+
+    // Reset fence for next frame.
+    _logical_device->resetFences(*_frame_in_flight_fence);
+
+    auto [result, image_index] = _logical_device->acquireNextImageKHR(
+        *_swap_chain,
+        time_out_ns,
+        *_image_available_semaphore,
+        nullptr
+    );
+    v_assert(result == s_success, "Failed to acquire image from swapchain.");
+
+    // Make sure cmd buffer is in default state.
+    auto result_reset = _command_buffer->reset();
+    v_assert(result_reset == s_success, "Failed to reset cmd buffer");
+
+    // Draw to the image :)
+    _record_command_buffer(image_index);
+
+    std::array const wait_semaphores = {*_image_available_semaphore};
+    std::array const signal_semaphores = {*_render_finished_semapahore};
+    constexpr vk::PipelineStageFlags wait_pipelines_stages =
+        vk::PipelineStageFlagBits::eColorAttachmentOutput;
+
+    vk::SubmitInfo const submit_info {
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = wait_semaphores.data(),
+        // Wait for color rendering to finish.
+        .pWaitDstStageMask = &wait_pipelines_stages,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &_command_buffer.get(), // Pointer is const.
+        // Which semaphores to signal (green light) once cmd buffer finishes.
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = signal_semaphores.data(),
+    };
+
+    auto result_submit =
+        _graphics_queue.submit(submit_info, *_frame_in_flight_fence);
+    v_assert(result_submit == s_success, "Failed to submit to graphics queue");
+
+    // Presentation.
+    std::array const swap_chains = {*_swap_chain};
+
+    vk::PresentInfoKHR present_info {
+        // Semaphores to wait before presentation.
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = signal_semaphores.data(),
+        .swapchainCount = 1,
+        .pSwapchains = swap_chains.data(),
+        .pImageIndices = &image_index,
+        .pResults = nullptr, // Optional.
+    };
+
+    auto result_present = _present_queue.presentKHR(present_info);
+    v_assert(result_present == s_success, "Failed to present.");
+}
+
+#pragma endregion DRAW
 
 } // namespace core

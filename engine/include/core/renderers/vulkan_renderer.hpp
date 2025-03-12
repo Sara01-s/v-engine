@@ -49,6 +49,9 @@ private:
         _create_render_pass();
         _create_graphics_pipeline();
         _create_framebuffers();
+        _create_command_pool();
+        _create_command_buffer();
+        _create_sync_objects();
     }
 
     void
@@ -77,6 +80,21 @@ private:
 
     void
     _create_framebuffers() noexcept;
+
+    void
+    _create_command_pool() noexcept;
+
+    void
+    _create_command_buffer() noexcept;
+
+    void
+    _create_sync_objects() noexcept;
+
+    void
+    _record_command_buffer(u32 const image_index) noexcept;
+
+    void
+    _draw_frame() noexcept;
 
 private:
 #if defined(NDEBUG) || !defined(USE_VALIDATION_LAYERS)
@@ -108,10 +126,23 @@ private:
     // Render Pipeline.
     vk::UniqueRenderPass _render_pass {nullptr};
     vk::UniquePipelineLayout _pipeline_Layout {nullptr};
-    vk::UniquePipeline _graphics_pipeline {};
+    vk::UniquePipeline _graphics_pipeline {nullptr};
 
-    // Framebuffer.
+    // Framebuffers.
     std::vector<vk::UniqueFramebuffer> _swap_chain_framebuffers {};
+
+    // Commands.
+    vk::UniqueCommandPool _command_pool {nullptr};
+    vk::UniqueCommandBuffer _command_buffer {nullptr};
+
+    // Sync objetcs.
+    // An image has been acquired from the swapchain and is ready for redering.
+    vk::UniqueSemaphore _image_available_semaphore {nullptr};
+    // Rendering has finished and presentation can happen.
+    vk::UniqueSemaphore _render_finished_semapahore {nullptr};
+    // Indicates if a frames is currentyl rendering.
+    // (to make sure only one frame is rendering at a time).
+    vk::UniqueFence _frame_in_flight_fence {nullptr};
 };
 
 // Helper function to read shader files.
@@ -120,7 +151,7 @@ read_file(std::string const& file_name) noexcept {
     // Start reading file from the end and read it as binary data.
     std::ifstream file(file_name, std::ios::ate | std::ios::binary);
 
-    core_assert(file.is_open(), "Failed to open file");
+    v_assert(file.is_open(), "Failed to open file");
 
     // Since we started at the end, we can tell the file size :).
     usize const file_size = static_cast<usize>(file.tellg());
