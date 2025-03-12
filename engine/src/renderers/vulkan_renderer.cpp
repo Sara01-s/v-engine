@@ -11,17 +11,29 @@
 
 namespace core {
 
-static constexpr vk::Result s_success = vk::Result::eSuccess;
-static constexpr u32 s_max_frames_in_flight = 2;
+static constexpr vk::Result s_success {vk::Result::eSuccess};
 static constexpr std::array s_physical_device_extensions {
     vk::KHRSwapchainExtensionName
 };
+
+static void
+s_frame_buffer_resize_callback(
+    GLFWwindow* window,
+    int new_width,
+    int new_height
+) {
+    auto app =
+        reinterpret_cast<VulkanRenderer*>(glfwGetWindowUserPointer(window));
+    app->set_resized(true);
+}
 
 #pragma region PUBLIC_GFX_API
 
 void
 VulkanRenderer::init(GLFWwindow* window) noexcept {
     _window = window;
+
+    glfwSetFramebufferSizeCallback(_window, s_frame_buffer_resize_callback);
 
     Log::header("Initializing Vulkan Renderer.");
     _init_vulkan();
@@ -457,6 +469,42 @@ VulkanRenderer::_create_swap_chain() noexcept {
     // Store swap chain state.
     _swap_chain_image_format = surface_format.format;
     _swap_chain_extent = extent;
+}
+
+void
+VulkanRenderer::_recreate_swap_chain() noexcept {
+    int width {0};
+    int height {0};
+
+    glfwGetFramebufferSize(_window, &width, &height);
+
+    // In case of window minimization, pause execution.
+    while (width == 0 || height == 0) {
+        glfwGetFramebufferSize(_window, &width, &height);
+        glfwWaitEvents();
+    }
+
+    auto result = _logical_device->waitIdle();
+    v_assert(result == vk::Result::eSuccess, "Failed to wait idle");
+
+    _cleanup_swap_chain();
+
+    _create_swap_chain();
+    _create_image_views();
+    _create_framebuffers();
+}
+
+void
+VulkanRenderer::_cleanup_swap_chain() noexcept {
+    for (auto& framebuffer : _swap_chain_framebuffers) {
+        _logical_device->destroyFramebuffer(*framebuffer, nullptr);
+    }
+
+    for (auto& image_view : _swap_chain_image_views) {
+        _logical_device->destroyImageView(*image_view, nullptr);
+    }
+
+    _logical_device->destroySwapchainKHR(*_swap_chain);
 }
 
 #pragma endregion SWAP_CHAIN
@@ -1066,7 +1114,7 @@ VulkanRenderer::_create_command_pool() noexcept {
 }
 
 void
-VulkanRenderer::_create_command_buffer() noexcept {
+VulkanRenderer::_create_command_buffers() noexcept {
     Log::header("Creating Command Buffer.");
 
     vk::CommandBufferAllocateInfo cmd_alloc_info {
@@ -1074,17 +1122,20 @@ VulkanRenderer::_create_command_buffer() noexcept {
         // Primary: Can be submitted to queues, but not called from other cmd buffers.
         // Secondary: Cannot be submitted to queues, but can be call from a primery cmd buffer.
         .level = vk::CommandBufferLevel::ePrimary,
-        .commandBufferCount = 1,
+        .commandBufferCount = static_cast<u32>(_command_buffers.size()),
     };
 
     auto [result, cmd_buffers] =
         _logical_device->allocateCommandBuffersUnique(cmd_alloc_info);
 
     v_assert(result == s_success, "Failed to allocate Command Buffer.");
+    v_assert(
+        _command_buffers.size() == cmd_buffers.size(),
+        "Requested command buffers have different size than storage."
+    );
 
-    _command_buffer = std::move(cmd_buffers[0]);
-
-    Log::info(Log::LIGHT_GREEN, "Command Buffer successfully created.");
+    std::move(cmd_buffers.begin(), cmd_buffers.end(), _command_buffers.begin());
+    Log::info(Log::LIGHT_GREEN, "Command Buffers successfully created.");
 }
 
 void
@@ -1105,7 +1156,7 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
         .pInheritanceInfo = nullptr, // Optional.
     };
 
-    auto result_begin = _command_buffer->begin(begin_info);
+    auto result_begin = _command_buffers[_current_frame]->begin(begin_info);
     v_assert(result_begin == s_success, "Failed to begin cmd record");
 
     Log::info("Command Buffer recording started.");
@@ -1129,7 +1180,7 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
         .pClearValues = &clear_value,
     };
 
-    _command_buffer->beginRenderPass(
+    _command_buffers[_current_frame]->beginRenderPass(
         render_pass_begin_info,
         vk::SubpassContents::eInline // For primary commands.
     );
@@ -1140,7 +1191,7 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
     // Note: All vkCmds return void.
 
     // Bind graphics pipeline.
-    _command_buffer->bindPipeline(
+    _command_buffers[_current_frame]->bindPipeline(
         vk::PipelineBindPoint::eGraphics,
         *_graphics_pipeline
     );
@@ -1158,7 +1209,7 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
     };
 
     constexpr u32 first_viewport {0};
-    _command_buffer->setViewport(first_viewport, viewport);
+    _command_buffers[_current_frame]->setViewport(first_viewport, viewport);
 
     Log::info("Viewport set.");
 
@@ -1168,7 +1219,7 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
     };
 
     constexpr u32 first_scissor {0};
-    _command_buffer->setScissor(first_scissor, scissor);
+    _command_buffers[_current_frame]->setScissor(first_scissor, scissor);
 
     Log::info("Scissor set.");
 
@@ -1178,14 +1229,14 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
     constexpr u32 first_vertex {0}; // Defines min value of gl_VertexIndex.
     constexpr u32 first_instance {0};
 
-    _command_buffer
+    _command_buffers[_current_frame]
         ->draw(vertex_count, instance_count, first_vertex, first_instance);
 
     Log::info("Draw command issued.");
 
     // End.
-    _command_buffer->endRenderPass();
-    auto result_end = _command_buffer->end();
+    _command_buffers[_current_frame]->endRenderPass();
+    auto result_end = _command_buffers[_current_frame]->end();
     v_assert(result_end == s_success, "Failed to record cmd buffer.");
 
     Log::info(Log::LIGHT_GREEN, "Command Buffer recording completed.");
@@ -1205,28 +1256,33 @@ VulkanRenderer::_create_sync_objects() noexcept {
         .flags = vk::FenceCreateFlagBits::eSignaled,
     };
 
-    auto [result1, image_available_semaphore] =
-        _logical_device->createSemaphoreUnique(semaphore_info);
-    v_assert(
-        result1 == s_success,
-        "Failed to create Image Available Semaphore."
-    );
+    for (usize i {}; i < s_max_frames_in_flight; ++i) {
+        auto [result1, image_available_semaphore] =
+            _logical_device->createSemaphoreUnique(semaphore_info);
+        v_assert(
+            result1 == s_success,
+            "Failed to create Image Available Semaphore."
+        );
 
-    auto [result2, render_finished_semaphore] =
-        _logical_device->createSemaphoreUnique(semaphore_info);
-    v_assert(
-        result2 == s_success,
-        "Failed to create Render Finished Semaphore."
-    );
+        auto [result2, render_finished_semaphore] =
+            _logical_device->createSemaphoreUnique(semaphore_info);
+        v_assert(
+            result2 == s_success,
+            "Failed to create Render Finished Semaphore."
+        );
 
-    _image_available_semaphore = std::move(image_available_semaphore);
-    _render_finished_semapahore = std::move(render_finished_semaphore);
+        _image_available_semaphores[i] = std::move(image_available_semaphore);
+        _render_finished_semapahores[i] = std::move(render_finished_semaphore);
 
-    auto [result3, frame_in_flight_fence] =
-        _logical_device->createFenceUnique(fence_info);
-    v_assert(result3 == s_success, "Failed to create Frame In Flight Fence");
+        auto [result3, frame_in_flight_fence] =
+            _logical_device->createFenceUnique(fence_info);
+        v_assert(
+            result3 == s_success,
+            "Failed to create Frame In Flight Fence"
+        );
 
-    _frame_in_flight_fence = std::move(frame_in_flight_fence);
+        _frame_in_flight_fences[i] = std::move(frame_in_flight_fence);
+    }
 };
 
 #pragma endregion SYNC_OBJECTS
@@ -1261,7 +1317,7 @@ VulkanRenderer::_draw_frame() noexcept {
     constexpr vk::Bool32 wait_for_all {vk::True};
     constexpr u64 time_out_ns {std::numeric_limits<u64>::max()};
     auto result_wait = _logical_device->waitForFences(
-        *_frame_in_flight_fence,
+        *_frame_in_flight_fences[_current_frame],
         wait_for_all,
         time_out_ns
     );
@@ -1270,26 +1326,30 @@ VulkanRenderer::_draw_frame() noexcept {
         "Failed to wait for frame in flight fence."
     );
 
-    // Reset fence for next frame.
-    _logical_device->resetFences(*_frame_in_flight_fence);
-
     auto [result, image_index] = _logical_device->acquireNextImageKHR(
         *_swap_chain,
         time_out_ns,
-        *_image_available_semaphore,
+        *_image_available_semaphores[_current_frame],
         nullptr
     );
     v_assert(result == s_success, "Failed to acquire image from swapchain.");
 
+    // Reset fence for next frame.
+    _logical_device->resetFences(*_frame_in_flight_fences[_current_frame]);
+
     // Make sure cmd buffer is in default state.
-    auto result_reset = _command_buffer->reset();
+    auto result_reset = _command_buffers[_current_frame]->reset();
     v_assert(result_reset == s_success, "Failed to reset cmd buffer");
 
     // Draw to the image :)
     _record_command_buffer(image_index);
 
-    std::array const wait_semaphores = {*_image_available_semaphore};
-    std::array const signal_semaphores = {*_render_finished_semapahore};
+    std::array const wait_semaphores = {
+        *_image_available_semaphores[_current_frame]
+    };
+    std::array const signal_semaphores = {
+        *_render_finished_semapahores[_current_frame]
+    };
     constexpr vk::PipelineStageFlags wait_pipelines_stages =
         vk::PipelineStageFlagBits::eColorAttachmentOutput;
 
@@ -1299,14 +1359,17 @@ VulkanRenderer::_draw_frame() noexcept {
         // Wait for color rendering to finish.
         .pWaitDstStageMask = &wait_pipelines_stages,
         .commandBufferCount = 1,
-        .pCommandBuffers = &_command_buffer.get(), // Pointer is const.
+        .pCommandBuffers =
+            &_command_buffers[_current_frame].get(), // Pointer is const.
         // Which semaphores to signal (green light) once cmd buffer finishes.
         .signalSemaphoreCount = 1,
         .pSignalSemaphores = signal_semaphores.data(),
     };
 
-    auto result_submit =
-        _graphics_queue.submit(submit_info, *_frame_in_flight_fence);
+    auto result_submit = _graphics_queue.submit(
+        submit_info,
+        *_frame_in_flight_fences[_current_frame]
+    );
     v_assert(result_submit == s_success, "Failed to submit to graphics queue");
 
     // Presentation.
@@ -1323,7 +1386,19 @@ VulkanRenderer::_draw_frame() noexcept {
     };
 
     auto result_present = _present_queue.presentKHR(present_info);
-    v_assert(result_present == s_success, "Failed to present.");
+
+    // Suboptimal: The swapchain can still be used to successfully present
+    // the surface, but the surface properties are no longer matched exactly.
+    if (result_present == vk::Result::eErrorOutOfDateKHR ||
+        result_present == vk::Result::eSuboptimalKHR || _framebuffer_resized) {
+        _framebuffer_resized = false;
+        _recreate_swap_chain();
+
+        return;
+    }
+
+    // Advance to the next frame.
+    _current_frame = (_current_frame + 1) % s_max_frames_in_flight;
 }
 
 #pragma endregion DRAW

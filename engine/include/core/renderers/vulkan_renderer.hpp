@@ -36,6 +36,11 @@ public:
     void
     cleanup() noexcept;
 
+    void
+    set_resized(bool value) noexcept {
+        _framebuffer_resized = value;
+    }
+
 private:
     void
     _init_vulkan() noexcept {
@@ -50,7 +55,7 @@ private:
         _create_graphics_pipeline();
         _create_framebuffers();
         _create_command_pool();
-        _create_command_buffer();
+        _create_command_buffers();
         _create_sync_objects();
     }
 
@@ -70,6 +75,12 @@ private:
     _create_swap_chain() noexcept;
 
     void
+    _cleanup_swap_chain() noexcept;
+
+    void
+    _recreate_swap_chain() noexcept;
+
+    void
     _create_image_views() noexcept;
 
     void
@@ -85,7 +96,7 @@ private:
     _create_command_pool() noexcept;
 
     void
-    _create_command_buffer() noexcept;
+    _create_command_buffers() noexcept;
 
     void
     _create_sync_objects() noexcept;
@@ -102,6 +113,10 @@ private:
 #else
     static constexpr bool s_enable_validation_layers {true};
 #endif
+    static constexpr u32 s_max_frames_in_flight {2};
+
+    u32 _current_frame {0};
+    bool _framebuffer_resized {false};
 
     // Vulkan Core.
     GLFWwindow* _window {nullptr};
@@ -133,16 +148,20 @@ private:
 
     // Commands.
     vk::UniqueCommandPool _command_pool {nullptr};
-    vk::UniqueCommandBuffer _command_buffer {nullptr};
+    std::array<vk::UniqueCommandBuffer, s_max_frames_in_flight>
+        _command_buffers {};
 
     // Sync objetcs.
     // An image has been acquired from the swapchain and is ready for redering.
-    vk::UniqueSemaphore _image_available_semaphore {nullptr};
+    std::array<vk::UniqueSemaphore, s_max_frames_in_flight>
+        _image_available_semaphores {};
     // Rendering has finished and presentation can happen.
-    vk::UniqueSemaphore _render_finished_semapahore {nullptr};
+    std::array<vk::UniqueSemaphore, s_max_frames_in_flight>
+        _render_finished_semapahores {};
     // Indicates if a frames is currentyl rendering.
     // (to make sure only one frame is rendering at a time).
-    vk::UniqueFence _frame_in_flight_fence {nullptr};
+    std::array<vk::UniqueFence, s_max_frames_in_flight>
+        _frame_in_flight_fences {};
 };
 
 // Helper function to read shader files.
