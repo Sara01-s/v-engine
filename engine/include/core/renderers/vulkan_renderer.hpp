@@ -11,6 +11,7 @@
 
 #include "../log.hpp"
 #include "../types.hpp"
+#include "vulkan_drawable.hpp"
 
 #define USE_VALIDATION_LAYERS
 
@@ -55,9 +56,13 @@ private:
         _create_graphics_pipeline();
         _create_framebuffers();
         _create_command_pool();
+        _create_vertex_buffer();
         _create_command_buffers();
         _create_sync_objects();
     }
+
+    void
+    _draw_frame() noexcept;
 
     void
     _create_vk_instance() noexcept;
@@ -102,10 +107,26 @@ private:
     _create_sync_objects() noexcept;
 
     void
+    _create_vertex_buffer() noexcept;
+
+    void
     _record_command_buffer(u32 const image_index) noexcept;
 
     void
-    _draw_frame() noexcept;
+    _create_buffer_unique(
+        vk::DeviceSize const size,
+        vk::BufferUsageFlags const usage,
+        vk::MemoryPropertyFlags const properties,
+        vk::UniqueBuffer& buffer,
+        vk::UniqueDeviceMemory& buffer_memory
+    ) noexcept;
+
+    void
+    _copy_buffer(
+        vk::UniqueBuffer& src_buffer,
+        vk::UniqueBuffer& dst_buffer,
+        vk::DeviceSize const size
+    ) noexcept;
 
 private:
 #if defined(NDEBUG) || !defined(USE_VALIDATION_LAYERS)
@@ -124,7 +145,7 @@ private:
     vk::UniqueSurfaceKHR _surface {nullptr};
     // PhysicalDevice is implicitaly destroyed when _vk_instance is destroyed.
     vk::PhysicalDevice _physical_device {nullptr};
-    vk::UniqueDevice _logical_device {nullptr};
+    vk::UniqueDevice _device {nullptr}; // LOGICAL device.
     // Device is implicitaly destroyed when _devie is destroyed.
     vk::Queue _graphics_queue {nullptr};
     vk::Queue _present_queue {nullptr};
@@ -162,6 +183,15 @@ private:
     // (to make sure only one frame is rendering at a time).
     std::array<vk::UniqueFence, s_max_frames_in_flight>
         _frame_in_flight_fences {};
+
+    // Drawables.
+    vk::UniqueBuffer _vertex_buffer {nullptr};
+    vk::UniqueDeviceMemory _vertex_buffer_memory {nullptr};
+    std::array<Vertex, 3> _vertices = {
+        Vertex {.position = {0.0f, -0.5f}, .color = {1.0f, 0.0f, 0.5f}},
+        Vertex {.position = {0.5f, 0.5f}, .color = {1.0f, 0.5f, 0.0f}},
+        Vertex {.position = {-0.5, 0.5}, .color = {0.0f, 0.0f, 1.0f}},
+    };
 };
 
 // Helper function to read shader files.

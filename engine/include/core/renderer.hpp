@@ -44,7 +44,7 @@ private:
         constexpr u32 width {800};
         constexpr u32 height {600};
 
-        _window = glfwCreateWindow(width, height, "Renderer", nullptr, nullptr);
+        _window = glfwCreateWindow(width, height, "Vuwulkan", nullptr, nullptr);
 
         if (!_window) {
             Log::error("Failed to create window");

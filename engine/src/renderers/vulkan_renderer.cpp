@@ -447,9 +447,9 @@ VulkanRenderer::_create_swap_chain() noexcept {
     swap_chain_create_info.clipped = vk::True;
     swap_chain_create_info.oldSwapchain = nullptr;
 
-    v_assert(_logical_device.get(), "Device is nullptr, please initialize it.");
+    v_assert(_device.get(), "Device is nullptr, please initialize it.");
     auto [result, swap_chain] =
-        _logical_device.get().createSwapchainKHRUnique(swap_chain_create_info);
+        _device.get().createSwapchainKHRUnique(swap_chain_create_info);
 
     v_assert(result == s_success, "Failed to create Swap Chain");
     _swap_chain = std::move(swap_chain);
@@ -457,8 +457,7 @@ VulkanRenderer::_create_swap_chain() noexcept {
     Log::info(Log::LIGHT_GREEN, "Swap Chain successfully created.");
 
     // Retrieve images.
-    auto [result2, images] =
-        _logical_device->getSwapchainImagesKHR(*_swap_chain);
+    auto [result2, images] = _device->getSwapchainImagesKHR(*_swap_chain);
 
     v_assert(result2 == s_success, "Failed to retrieve swap chain images.");
 
@@ -484,7 +483,7 @@ VulkanRenderer::_recreate_swap_chain() noexcept {
         glfwWaitEvents();
     }
 
-    auto result = _logical_device->waitIdle();
+    auto result = _device->waitIdle();
     v_assert(result == vk::Result::eSuccess, "Failed to wait idle");
 
     _cleanup_swap_chain();
@@ -497,14 +496,14 @@ VulkanRenderer::_recreate_swap_chain() noexcept {
 void
 VulkanRenderer::_cleanup_swap_chain() noexcept {
     for (auto& framebuffer : _swap_chain_framebuffers) {
-        _logical_device->destroyFramebuffer(*framebuffer, nullptr);
+        _device->destroyFramebuffer(*framebuffer, nullptr);
     }
 
     for (auto& image_view : _swap_chain_image_views) {
-        _logical_device->destroyImageView(*image_view, nullptr);
+        _device->destroyImageView(*image_view, nullptr);
     }
 
-    _logical_device->destroySwapchainKHR(*_swap_chain);
+    _device->destroySwapchainKHR(*_swap_chain);
 }
 
 #pragma endregion SWAP_CHAIN
@@ -537,7 +536,7 @@ VulkanRenderer::_create_image_views() noexcept {
         image_view_create_info.components.a = vk::ComponentSwizzle::eIdentity;
 
         auto [result, image_view] =
-            _logical_device->createImageViewUnique(image_view_create_info);
+            _device->createImageViewUnique(image_view_create_info);
 
         v_assert(result == s_success, "Failed to create unique image view.");
 
@@ -729,20 +728,16 @@ VulkanRenderer::_create_logical_device() noexcept {
 
     v_assert(result == s_success, "Failed to create Logical Device");
 
-    _logical_device = std::move(device);
+    _device = std::move(device);
     Log::info(Log::LIGHT_GREEN, "Logical Device successfully created.");
 
     // Create queues.
-    _graphics_queue = _logical_device->getQueue(
-        queue_family_indices.graphics_family.value(),
-        0x0
-    );
+    _graphics_queue =
+        _device->getQueue(queue_family_indices.graphics_family.value(), 0x0);
     Log::sub_info("Graphics queue created: ", _graphics_queue);
 
-    _present_queue = _logical_device->getQueue(
-        queue_family_indices.present_family.value(),
-        0x0
-    );
+    _present_queue =
+        _device->getQueue(queue_family_indices.present_family.value(), 0x0);
     Log::sub_info("Present queue created: ", _present_queue);
 }
 
@@ -819,7 +814,7 @@ VulkanRenderer::_create_render_pass() noexcept {
     };
 
     auto [result, render_pass] =
-        _logical_device->createRenderPassUnique(render_pass_info);
+        _device->createRenderPassUnique(render_pass_info);
 
     v_assert(result == s_success, "Failed to create Render Pass.");
 
@@ -831,7 +826,7 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     Log::header("Creating Graphics Pipeline.");
 
     // Set up shaders.
-    // FIXME - Use non-harcode absolute filepath.
+    // FIXME - Use non-harcoded absolute filepath.
     auto vert_shader_code = read_file(
         "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_vert.spv"
     );
@@ -845,11 +840,11 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     Log::sub_info("Size: ", frag_shader_code.size());
 
     vk::UniqueShaderModule vert_shader_module =
-        _create_shader_module(_logical_device, vert_shader_code);
+        _create_shader_module(_device, vert_shader_code);
     Log::info("Vertex shader module created.");
 
     vk::UniqueShaderModule frag_shader_module =
-        _create_shader_module(_logical_device, frag_shader_code);
+        _create_shader_module(_device, frag_shader_code);
     Log::info("Fragment shader module created.");
 
     // Shader code is no longer necessary after creating shader modules.
@@ -878,11 +873,15 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
         fragment_shader_stage_info,
     };
 
-    constexpr vk::PipelineVertexInputStateCreateInfo vertex_input_info {
-        .vertexBindingDescriptionCount = 0,
-        .pVertexBindingDescriptions = nullptr,
-        .vertexAttributeDescriptionCount = 0,
-        .pVertexAttributeDescriptions = nullptr,
+    constexpr auto binding_description = Vertex::binding_description();
+    constexpr auto attribute_descriptions = Vertex::attribute_description();
+
+    vk::PipelineVertexInputStateCreateInfo const vertex_input_info {
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding_description,
+        .vertexAttributeDescriptionCount =
+            static_cast<u32>(attribute_descriptions.size()),
+        .pVertexAttributeDescriptions = attribute_descriptions.data(),
     };
 
     constexpr vk::PipelineInputAssemblyStateCreateInfo input_assembly_info {
@@ -1010,7 +1009,7 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     };
 
     auto [result, pipeline_layout] =
-        _logical_device->createPipelineLayoutUnique(pipeline_layout_info);
+        _device->createPipelineLayoutUnique(pipeline_layout_info);
 
     v_assert(result == s_success, "Failed to create pipeline layout.");
 
@@ -1045,11 +1044,10 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
         .basePipelineIndex = -1, // Optional.
     };
 
-    auto [result2, graphics_pipeline] =
-        _logical_device->createGraphicsPipelineUnique(
-            nullptr, // Pipeline Cache.
-            graphics_pipeline_info
-        );
+    auto [result2, graphics_pipeline] = _device->createGraphicsPipelineUnique(
+        nullptr, // Pipeline Cache.
+        graphics_pipeline_info
+    );
 
     v_assert(result2 == s_success, "Failed to create Graphics Pipeline.");
 
@@ -1078,7 +1076,7 @@ VulkanRenderer::_create_framebuffers() noexcept {
         };
 
         auto [result, framebuffer] =
-            _logical_device->createFramebufferUnique(framebuffer_info);
+            _device->createFramebufferUnique(framebuffer_info);
 
         v_assert(result == s_success, "Failed to create Framebuffer");
 
@@ -1104,8 +1102,7 @@ VulkanRenderer::_create_command_pool() noexcept {
         .queueFamilyIndex = queue_family_indices.graphics_family.value(),
     };
 
-    auto [result, cmd_pool] =
-        _logical_device->createCommandPoolUnique(cmd_pool_info);
+    auto [result, cmd_pool] = _device->createCommandPoolUnique(cmd_pool_info);
 
     v_assert(result == s_success, "Failed to create Cmd Pool.");
     _command_pool = std::move(cmd_pool);
@@ -1126,7 +1123,7 @@ VulkanRenderer::_create_command_buffers() noexcept {
     };
 
     auto [result, cmd_buffers] =
-        _logical_device->allocateCommandBuffersUnique(cmd_alloc_info);
+        _device->allocateCommandBuffersUnique(cmd_alloc_info);
 
     v_assert(result == s_success, "Failed to allocate Command Buffer.");
     v_assert(
@@ -1223,12 +1220,21 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
 
     Log::info("Scissor set.");
 
-    // D-D-D-Draaaaaaaawww!!!!!!
-    constexpr u32 vertex_count {3};
+    // Vertex Buffers.
+    std::array const vertex_buffers {*_vertex_buffer};
+    constexpr std::array<vk::DeviceSize, 1> offsets = {0};
+
+    constexpr u32 first_binding {0};
+    _command_buffers[_current_frame]
+        ->bindVertexBuffers(first_binding, vertex_buffers, offsets);
+
+    usize const vertex_size = _vertices.size();
+    u32 const vertex_count = static_cast<u32>(vertex_size);
     constexpr u32 instance_count {3};
     constexpr u32 first_vertex {0}; // Defines min value of gl_VertexIndex.
     constexpr u32 first_instance {0};
 
+    // D-D-D-Draaaaaaaawww call!!!!!!
     _command_buffers[_current_frame]
         ->draw(vertex_count, instance_count, first_vertex, first_instance);
 
@@ -1258,14 +1264,14 @@ VulkanRenderer::_create_sync_objects() noexcept {
 
     for (usize i {}; i < s_max_frames_in_flight; ++i) {
         auto [result1, image_available_semaphore] =
-            _logical_device->createSemaphoreUnique(semaphore_info);
+            _device->createSemaphoreUnique(semaphore_info);
         v_assert(
             result1 == s_success,
             "Failed to create Image Available Semaphore."
         );
 
         auto [result2, render_finished_semaphore] =
-            _logical_device->createSemaphoreUnique(semaphore_info);
+            _device->createSemaphoreUnique(semaphore_info);
         v_assert(
             result2 == s_success,
             "Failed to create Render Finished Semaphore."
@@ -1275,7 +1281,7 @@ VulkanRenderer::_create_sync_objects() noexcept {
         _render_finished_semapahores[i] = std::move(render_finished_semaphore);
 
         auto [result3, frame_in_flight_fence] =
-            _logical_device->createFenceUnique(fence_info);
+            _device->createFenceUnique(fence_info);
         v_assert(
             result3 == s_success,
             "Failed to create Frame In Flight Fence"
@@ -1316,7 +1322,7 @@ VulkanRenderer::_draw_frame() noexcept {
     // in first frame.
     constexpr vk::Bool32 wait_for_all {vk::True};
     constexpr u64 time_out_ns {std::numeric_limits<u64>::max()};
-    auto result_wait = _logical_device->waitForFences(
+    auto result_wait = _device->waitForFences(
         *_frame_in_flight_fences[_current_frame],
         wait_for_all,
         time_out_ns
@@ -1326,7 +1332,7 @@ VulkanRenderer::_draw_frame() noexcept {
         "Failed to wait for frame in flight fence."
     );
 
-    auto [result, image_index] = _logical_device->acquireNextImageKHR(
+    auto [result, image_index] = _device->acquireNextImageKHR(
         *_swap_chain,
         time_out_ns,
         *_image_available_semaphores[_current_frame],
@@ -1335,7 +1341,7 @@ VulkanRenderer::_draw_frame() noexcept {
     v_assert(result == s_success, "Failed to acquire image from swapchain.");
 
     // Reset fence for next frame.
-    _logical_device->resetFences(*_frame_in_flight_fences[_current_frame]);
+    _device->resetFences(*_frame_in_flight_fences[_current_frame]);
 
     // Make sure cmd buffer is in default state.
     auto result_reset = _command_buffers[_current_frame]->reset();
@@ -1403,4 +1409,208 @@ VulkanRenderer::_draw_frame() noexcept {
 
 #pragma endregion DRAW
 
+#pragma region BUFFERS
+
+u32
+_find_memory_type(
+    vk::PhysicalDevice const& physical_device,
+    u32 mem_type_filter,
+    vk::MemoryPropertyFlags const& properties
+) noexcept {
+    Log::info("Querying available memory types.");
+
+    // Query available types of memory.
+    auto const& mem_properties = physical_device.getMemoryProperties();
+
+    for (u32 i {}; i < mem_properties.memoryTypeCount; ++i) {
+        // Imagine mem_type_filter = 0000 0100
+        // we will shift a 1 to left to check if it matches with the mask.
+        // iteration i = 0:
+        //      test   = ...0000 0001 (1 << 0)
+        //    & filter = ...0000 0100 = 0 (FALSE)
+        // iteration i = 1:
+        //      test   = ...0000 0010 (1 << 1)
+        //    & filter = ...0000 0100 = 0 (FALSE)
+        // iteration i = 0:
+        //      test   = ...0000 0100 (1 << 2)
+        //    & filter = ...0000 0100 = 4 (TRUE, because any number != 0 = true).
+        u32 const test_mask = (1 << i);
+        // Hey you. yeah you. research about !! in c++, it's a banger.
+
+        auto const& mem_property_flags =
+            mem_properties.memoryTypes[i].propertyFlags;
+
+        Log::sub_info(
+            "Checking memory type ",
+            i,
+            ": ",
+            vk::to_string(mem_property_flags)
+        );
+
+        if ((mem_type_filter & test_mask) &&
+            (mem_property_flags & properties) == properties) {
+            Log::info("Suitable memory type found: ", i);
+            return i;
+        }
+    }
+
+    v_assert(false, "Failed to find suitable memory type.");
+    return -1;
+}
+
+void
+VulkanRenderer::_copy_buffer(
+    vk::UniqueBuffer& src_buffer,
+    vk::UniqueBuffer& dst_buffer,
+    vk::DeviceSize const size
+) noexcept {
+    vk::CommandBufferAllocateInfo const alloc_info {
+        .commandPool = *_command_pool,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    };
+
+    auto [result, cmd_buffer] =
+        _device->allocateCommandBuffersUnique(alloc_info);
+    v_assert(result == s_success, "Failed to allocate Cmd buffer.");
+
+    constexpr vk::CommandBufferBeginInfo begin_info {
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+    };
+
+    auto result_begin = cmd_buffer[0]->begin(begin_info);
+    v_assert(result_begin == s_success, "Failed to begin command buffer.");
+
+    vk::BufferCopy const copy_region {
+        .srcOffset = 0, // Optional.
+        .dstOffset = 0, // Optional.
+        .size = size,
+    };
+
+    cmd_buffer[0]->copyBuffer(*src_buffer, *dst_buffer, copy_region);
+
+    auto result_end = cmd_buffer[0]->end();
+    v_assert(result_end == s_success, "Failed to end command buffer.");
+
+    vk::SubmitInfo const submit_info {
+        .commandBufferCount = 1,
+        .pCommandBuffers = &(*cmd_buffer[0]),
+    };
+
+    auto result_submit = _graphics_queue.submit(submit_info);
+    v_assert(result_submit == s_success, "Failed to submit command buffer.");
+
+    auto result_wait = _graphics_queue.waitIdle();
+    v_assert(result_wait == s_success, "Failed to wait for graphics queue.");
+}
+
+void
+VulkanRenderer::_create_buffer_unique(
+    vk::DeviceSize const size,
+    vk::BufferUsageFlags const usage,
+    vk::MemoryPropertyFlags const properties,
+    vk::UniqueBuffer& buffer,
+    vk::UniqueDeviceMemory& buffer_memory
+) noexcept {
+    vk::BufferCreateInfo buffer_info {
+        .size = size,
+        .usage = usage,
+        .sharingMode = vk::SharingMode::eExclusive,
+    };
+
+    auto [result, unique_buffer] = _device->createBufferUnique(buffer_info);
+    v_assert(result == s_success, "Failed to create buffer");
+    buffer = std::move(unique_buffer);
+
+    auto const& buffer_mem_requirements =
+        _device->getBufferMemoryRequirements(*buffer);
+
+    vk::MemoryAllocateInfo const alloc_info {
+        .allocationSize = buffer_mem_requirements.size,
+        .memoryTypeIndex = _find_memory_type(
+            _physical_device,
+            buffer_mem_requirements.memoryTypeBits,
+            properties
+        ),
+    };
+
+    auto [result_alloc, mem] = _device->allocateMemoryUnique(alloc_info);
+    v_assert(result_alloc == s_success, "Failed to allocate buffer memory.");
+    buffer_memory = std::move(mem);
+
+    // Bind buffer.
+    // Since the memory is allocated specifically for this buffer,
+    // the offset is 0. If the offset is non-zero, then it is required to be
+    // divisible by mem_requirements.alignment.
+    // That can be check using: if (mem_requirements.aligment % mem_offset == 0).
+    // Note: vk::DeviceSize is 64-bits.
+    constexpr vk::DeviceSize mem_offset {0UL};
+    auto result_bind =
+        _device->bindBufferMemory(*buffer, *buffer_memory, mem_offset);
+    v_assert(result_bind == s_success, "Failed to bind buffer.");
+}
+
+void
+VulkanRenderer::_create_vertex_buffer() noexcept {
+    Log::header("Creating Vertex Buffer.");
+    // Enough space to save all vertices.
+    vk::DeviceSize const buffer_size = sizeof(_vertices[0]) * _vertices.size();
+    // TransferSrc: Buffer can be used as source in a memory transfer operation.
+    constexpr auto staging_usage = vk::BufferUsageFlagBits::eTransferSrc;
+    // Host visible: Memory is accessible from CPU, but must be flushed. (lives in RAM)
+    // Host coherent: Memory is accessible from CPU, and it's synced to GPU. (lives in RAM)
+    // DeviceLocal: Memory is NOT accessible from CPU, (lives in V-RAM).
+    // HostCached: Memory is accessible and cached in CPU, but cannot be coherent.
+    // We want to modify vertex data from the CPU in the main render loop.
+    // and we want it to be immediately synced in the GPU.
+    // This is costly but for now it's okay.
+    constexpr auto staging_properties =
+        vk::MemoryPropertyFlagBits::eHostVisible |
+        vk::MemoryPropertyFlagBits::eHostCoherent;
+
+    vk::UniqueBuffer staging_buffer {};
+    vk::UniqueDeviceMemory staging_buffer_memory {};
+
+    // Create Staging Buffer.
+    _create_buffer_unique(
+        buffer_size,
+        staging_usage,
+        staging_properties,
+        staging_buffer,
+        staging_buffer_memory
+    );
+
+    // Fill staging buffer.
+    auto [result_map, data] = _device->mapMemory(
+        *staging_buffer_memory,
+        0, // Offset.
+        buffer_size
+    );
+    v_assert(result_map == s_success, "Failed to map Staging Buffer memory.");
+    Log::info("Staging Buffer memory mapped.");
+
+    // Copy memory to GPU.
+    std::memcpy(data, _vertices.data(), static_cast<usize>(buffer_size));
+    Log::info("Staging Buffer data copied to GPU.");
+
+    _device->unmapMemory(*staging_buffer_memory);
+    Log::info("Staging Buffer memory unmapped.");
+
+    // TransferDst: Buffer can be used as destination in a memory transfer operation.
+    constexpr auto vertex_usage = vk::BufferUsageFlagBits::eTransferDst |
+        vk::BufferUsageFlagBits::eVertexBuffer;
+    constexpr auto vertex_properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
+    // Create Vertex Buffer.
+    _create_buffer_unique(
+        buffer_size,
+        vertex_usage,
+        vertex_properties,
+        _vertex_buffer,
+        _vertex_buffer_memory
+    );
+
+    _copy_buffer(staging_buffer, _vertex_buffer, buffer_size);
+}
+
+#pragma endregion BUFFERS
 } // namespace core
