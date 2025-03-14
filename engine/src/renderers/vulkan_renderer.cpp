@@ -27,6 +27,23 @@ s_frame_buffer_resize_callback(
     app->set_resized(true);
 }
 
+// Functions to handle vk::Results more elegantly.
+constexpr void
+_vk_expect(vk::Result const& call_result, c8 const* message) noexcept {
+    core_assert(call_result == vk::Result::eSuccess, message);
+}
+
+template <typename T>
+constexpr T
+_vk_expect(vk::ResultValue<T> result_value, const char* message) {
+    if (result_value.result == vk::Result::eSuccess) {
+        return std::move(result_value.value);
+    }
+
+    core_assert(false, message);
+    return {};
+}
+
 #pragma region PUBLIC_GFX_API
 
 void
@@ -56,7 +73,9 @@ VulkanRenderer::render() noexcept {
     Log::info("Render loop terminated.");
 }
 
-#pragma endregion
+#pragma endregion PUBLIC_GFX_API
+
+// PRIVATE.
 
 #pragma region VULKAN_INSTANCE
 
@@ -64,26 +83,9 @@ bool
 _check_validation_layer_support(
     std::span<char const*> const requested_validation_layers
 ) noexcept {
-    u32 layer_count {};
-
-    vk::Result enumeration_result =
-        vk::enumerateInstanceLayerProperties(&layer_count, nullptr);
-
-    v_assert(
-        enumeration_result == s_success,
+    auto available_layers = _vk_expect(
+        vk::enumerateInstanceLayerProperties(),
         "Failed to enumerate instance layer properties count."
-    );
-
-    std::vector<vk::LayerProperties> available_layers(layer_count);
-
-    vk::Result initialization_result = vk::enumerateInstanceLayerProperties(
-        &layer_count,
-        available_layers.data()
-    );
-
-    v_assert(
-        initialization_result == s_success,
-        "Failed to initialize instance layer properties."
     );
 
     Log::info("Available Validation Layers:");
@@ -110,8 +112,10 @@ _check_validation_layer_support(
 
 void
 VulkanRenderer::_create_vk_instance() noexcept {
-    u32 version {0};
-    vkEnumerateInstanceVersion(&version);
+    u32 version = _vk_expect(
+        vk::enumerateInstanceVersion(),
+        "Failed to enumerate vulkan instance version."
+    );
 
     Log::info(
         "System can support vulkan variant: ",
@@ -126,7 +130,7 @@ VulkanRenderer::_create_vk_instance() noexcept {
     // This is done to ensure maximum compatibility / stability.
     version &= ~(0xFFFU); // Lower twelve bytes.
 
-    vk::ApplicationInfo app_info {
+    vk::ApplicationInfo const app_info {
         .pApplicationName = "App",
         .applicationVersion = 1,
         .pEngineName = "V-Engine",
@@ -145,7 +149,7 @@ VulkanRenderer::_create_vk_instance() noexcept {
         Log::sub_info(glfw_extensions[i]);
     }
 
-    vk::InstanceCreateInfo instance_create_info {
+    vk::InstanceCreateInfo vk_instance_info {
         .flags = vk::InstanceCreateFlags {},
         .pApplicationInfo = &app_info,
         .enabledLayerCount = 0,
@@ -157,21 +161,21 @@ VulkanRenderer::_create_vk_instance() noexcept {
     if constexpr (s_enable_validation_layers) {
         std::array requested_layers = {"VK_LAYER_KHRONOS_validation"};
 
-        v_assert(
+        core_assert(
             _check_validation_layer_support(requested_layers),
             "Validation layers requested but not available, please install them."
         );
 
-        instance_create_info.enabledLayerCount =
+        vk_instance_info.enabledLayerCount =
             static_cast<u32>(requested_layers.size());
-        instance_create_info.ppEnabledLayerNames = requested_layers.data();
+        vk_instance_info.ppEnabledLayerNames = requested_layers.data();
     }
 
-    auto [result, instance] = vk::createInstanceUnique(instance_create_info);
+    _vk_instance = _vk_expect(
+        vk::createInstanceUnique(vk_instance_info),
+        "Failed to create Vulkan Instance"
+    );
 
-    v_assert(result == s_success, "Failed to create VK Instance.");
-
-    _vk_instance = std::move(instance);
     Log::info(Log::LIGHT_GREEN, "Vulkan Instance successfully created.");
 }
 
@@ -182,7 +186,7 @@ VulkanRenderer::_create_vk_instance() noexcept {
 void
 VulkanRenderer::_create_surface() noexcept {
     VkSurfaceKHR c_surface;
-    v_assert(
+    core_assert(
         glfwCreateWindowSurface(
             _vk_instance.get(),
             _window,
@@ -237,7 +241,7 @@ _find_queue_families(
             surface.get()
         );
 
-        v_assert(result == s_success, "Failed to check surface support");
+        core_assert(result == s_success, "Failed to check surface support");
 
         if (supported) {
             indices.present_family = i;
@@ -271,17 +275,17 @@ _query_swapchain_support(
         device.getProperties().deviceName
     );
 
-    auto [result1, capabilities] = device.getSurfaceCapabilitiesKHR(*surface);
-    v_assert(result1 == s_success, "Failed to get surface capabilities");
-
-    info.capabilities = capabilities;
+    info.capabilities = _vk_expect(
+        device.getSurfaceCapabilitiesKHR(*surface),
+        "Failed to get surface capabilities"
+    );
 
     Log::sub_info("Surface capabilities retrieved.");
 
-    auto [result2, formats] = device.getSurfaceFormatsKHR(*surface);
-    v_assert(result2 == s_success, "Failed to get surface formats");
-
-    info.formats = std::move(formats);
+    info.formats = _vk_expect(
+        device.getSurfaceFormatsKHR(*surface),
+        "Failed to get surface formats."
+    );
 
     for (const auto& format : info.formats) {
         Log::sub_info(
@@ -293,10 +297,10 @@ _query_swapchain_support(
         );
     }
 
-    auto [result3, present_modes] = device.getSurfacePresentModesKHR(*surface);
-    v_assert(result3 == s_success, "Failed to get present modes");
-
-    info.present_modes = std::move(present_modes);
+    info.present_modes = _vk_expect(
+        device.getSurfacePresentModesKHR(*surface),
+        "Failed to get present modes"
+    );
 
     Log::sub_info(
         "Present modes retrieved: ",
@@ -447,23 +451,20 @@ VulkanRenderer::_create_swap_chain() noexcept {
     swap_chain_create_info.clipped = vk::True;
     swap_chain_create_info.oldSwapchain = nullptr;
 
-    v_assert(_device.get(), "Device is nullptr, please initialize it.");
-    auto [result, swap_chain] =
-        _device.get().createSwapchainKHRUnique(swap_chain_create_info);
-
-    v_assert(result == s_success, "Failed to create Swap Chain");
-    _swap_chain = std::move(swap_chain);
+    _swap_chain = _vk_expect(
+        _device->createSwapchainKHRUnique(swap_chain_create_info),
+        "Failed to create Swap Chain"
+    );
 
     Log::info(Log::LIGHT_GREEN, "Swap Chain successfully created.");
 
     // Retrieve images.
-    auto [result2, images] = _device->getSwapchainImagesKHR(*_swap_chain);
+    _swap_chain_images = _vk_expect(
+        _device->getSwapchainImagesKHR(*_swap_chain),
+        "Failed to retrieve swap chain images."
+    );
 
-    v_assert(result2 == s_success, "Failed to retrieve swap chain images.");
-
-    Log::info("Retrieved (", images.size(), ") swap chain images.");
-
-    _swap_chain_images = std::move(images);
+    Log::info("Retrieved (", _swap_chain_images.size(), ") swap chain images.");
 
     // Store swap chain state.
     _swap_chain_image_format = surface_format.format;
@@ -483,8 +484,7 @@ VulkanRenderer::_recreate_swap_chain() noexcept {
         glfwWaitEvents();
     }
 
-    auto result = _device->waitIdle();
-    v_assert(result == vk::Result::eSuccess, "Failed to wait idle");
+    _vk_expect(_device->waitIdle(), "Failed to wait idle");
 
     _cleanup_swap_chain();
 
@@ -535,10 +535,10 @@ VulkanRenderer::_create_image_views() noexcept {
         image_view_create_info.components.b = vk::ComponentSwizzle::eIdentity;
         image_view_create_info.components.a = vk::ComponentSwizzle::eIdentity;
 
-        auto [result, image_view] =
-            _device->createImageViewUnique(image_view_create_info);
-
-        v_assert(result == s_success, "Failed to create unique image view.");
+        auto image_view = _vk_expect(
+            _device->createImageViewUnique(image_view_create_info),
+            "Failed to create unique image view."
+        );
 
         _swap_chain_image_views[i] = std::move(image_view);
     }
@@ -550,11 +550,8 @@ VulkanRenderer::_create_image_views() noexcept {
 
 bool
 _check_device_extension_support(vk::PhysicalDevice const& device) {
-    auto [result, available_extensions] =
-        device.enumerateDeviceExtensionProperties();
-
-    v_assert(
-        result == s_success,
+    auto available_extensions = _vk_expect(
+        device.enumerateDeviceExtensionProperties(),
         "Failed to get physical device extension properties."
     );
 
@@ -652,11 +649,12 @@ _rate_device_suitability(vk::PhysicalDevice const& device) noexcept {
 
 void
 VulkanRenderer::_create_physical_device() noexcept {
-    v_assert(_surface.get(), "Surface is nullptr.");
+    core_assert(_surface.get(), "Surface is nullptr.");
 
-    auto [result, physical_devices] = _vk_instance->enumeratePhysicalDevices();
-
-    v_assert(result == s_success, "Failed to find GPUs with Vulkan support.");
+    auto physical_devices = _vk_expect(
+        _vk_instance->enumeratePhysicalDevices(),
+        "Failed to find GPUs with Vulkan support."
+    );
 
     Log::info("Found (", physical_devices.size(), ") Physical devices:");
     for (auto const& device : physical_devices) {
@@ -668,7 +666,7 @@ VulkanRenderer::_create_physical_device() noexcept {
         }
     }
 
-    v_assert(_physical_device, "Failed to find a suitable GPU.");
+    core_assert(_physical_device, "Failed to find a suitable GPU.");
 
     std::multimap<u32, vk::PhysicalDevice> candidates {};
 
@@ -677,7 +675,7 @@ VulkanRenderer::_create_physical_device() noexcept {
         candidates.insert(std::make_pair(score, device));
     }
 
-    v_assert(candidates.rbegin()->first > 0, "Failed to rate GPUs.");
+    core_assert(candidates.rbegin()->first > 0, "Failed to rate GPUs.");
 
     _physical_device = candidates.rbegin()->second;
     Log::info(Log::LIGHT_GREEN, "Physical Device successfully selected.");
@@ -723,12 +721,10 @@ VulkanRenderer::_create_logical_device() noexcept {
         .pEnabledFeatures = &device_features,
     };
 
-    auto [result, device] =
-        _physical_device.createDeviceUnique(device_create_info);
-
-    v_assert(result == s_success, "Failed to create Logical Device");
-
-    _device = std::move(device);
+    _device = _vk_expect(
+        _physical_device.createDeviceUnique(device_create_info),
+        "Failed to create Logical Device"
+    );
     Log::info(Log::LIGHT_GREEN, "Logical Device successfully created.");
 
     // Create queues.
@@ -755,12 +751,10 @@ _create_shader_module(
         .pCode = reinterpret_cast<u32 const*>(code.data()),
     };
 
-    auto [result, shader_module] =
-        logical_device->createShaderModuleUnique(shader_module_create_info);
-
-    v_assert(result == s_success, "Failed to create shader module");
-
-    return std::move(shader_module);
+    return _vk_expect(
+        logical_device->createShaderModuleUnique(shader_module_create_info),
+        "Failed to create shader module"
+    );
 }
 
 void
@@ -814,12 +808,10 @@ VulkanRenderer::_create_render_pass() noexcept {
         .pDependencies = &subpass_dependency,
     };
 
-    auto [result, render_pass] =
-        _device->createRenderPassUnique(render_pass_info);
-
-    v_assert(result == s_success, "Failed to create Render Pass.");
-
-    _render_pass = std::move(render_pass);
+    _render_pass = _vk_expect(
+        _device->createRenderPassUnique(render_pass_info),
+        "Failed to create Render Pass"
+    );
 }
 
 void
@@ -1009,12 +1001,11 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
         .pPushConstantRanges = nullptr, // Optional.
     };
 
-    auto [result, pipeline_layout] =
-        _device->createPipelineLayoutUnique(pipeline_layout_info);
+    _pipeline_Layout = _vk_expect(
+        _device->createPipelineLayoutUnique(pipeline_layout_info),
+        "Failed to create pipeline layout."
+    );
 
-    v_assert(result == s_success, "Failed to create pipeline layout.");
-
-    _pipeline_Layout = std::move(pipeline_layout);
     Log::info("Pipeline layout created.");
 
     // FINALLY... IT'S ALIVE!!! THE RENDER PIPELINE!!!
@@ -1045,14 +1036,11 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
         .basePipelineIndex = -1, // Optional.
     };
 
-    auto [result2, graphics_pipeline] = _device->createGraphicsPipelineUnique(
-        nullptr, // Pipeline Cache.
-        graphics_pipeline_info
+    _graphics_pipeline = _vk_expect(
+        _device->createGraphicsPipelineUnique(nullptr, graphics_pipeline_info),
+        "Failed to create Graphics Pipeline"
     );
 
-    v_assert(result2 == s_success, "Failed to create Graphics Pipeline.");
-
-    _graphics_pipeline = std::move(graphics_pipeline);
     Log::info(Log::LIGHT_GREEN, "Graphics Pipeline successfully created.");
 }
 
@@ -1076,12 +1064,10 @@ VulkanRenderer::_create_framebuffers() noexcept {
             .layers = 1,
         };
 
-        auto [result, framebuffer] =
-            _device->createFramebufferUnique(framebuffer_info);
-
-        v_assert(result == s_success, "Failed to create Framebuffer");
-
-        _swap_chain_framebuffers[i] = std::move(framebuffer);
+        _swap_chain_framebuffers[i] = _vk_expect(
+            _device->createFramebufferUnique(framebuffer_info),
+            "Failed to create Framebuffer"
+        );
     }
 }
 
@@ -1103,10 +1089,10 @@ VulkanRenderer::_create_command_pool() noexcept {
         .queueFamilyIndex = queue_family_indices.graphics_family.value(),
     };
 
-    auto [result, cmd_pool] = _device->createCommandPoolUnique(cmd_pool_info);
-
-    v_assert(result == s_success, "Failed to create Cmd Pool.");
-    _command_pool = std::move(cmd_pool);
+    _command_pool = _vk_expect(
+        _device->createCommandPoolUnique(cmd_pool_info),
+        "Failed to create Cmd Pool."
+    );
 
     Log::info(Log::LIGHT_GREEN, "Command Pool successfully created.");
 }
@@ -1123,11 +1109,12 @@ VulkanRenderer::_create_command_buffers() noexcept {
         .commandBufferCount = static_cast<u32>(_command_buffers.size()),
     };
 
-    auto [result, cmd_buffers] =
-        _device->allocateCommandBuffersUnique(cmd_alloc_info);
+    auto cmd_buffers = _vk_expect(
+        _device->allocateCommandBuffersUnique(cmd_alloc_info),
+        "Failed to allocate Command Buffer."
+    );
 
-    v_assert(result == s_success, "Failed to allocate Command Buffer.");
-    v_assert(
+    core_assert(
         _command_buffers.size() == cmd_buffers.size(),
         "Requested command buffers have different size than storage."
     );
@@ -1154,8 +1141,10 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
         .pInheritanceInfo = nullptr, // Optional.
     };
 
-    auto result_begin = _command_buffers[_current_frame]->begin(begin_info);
-    v_assert(result_begin == s_success, "Failed to begin cmd record");
+    _vk_expect(
+        _command_buffers[_current_frame]->begin(begin_info),
+        "Failed to begin cmd record"
+    );
 
     Log::info("Command Buffer recording started.");
 
@@ -1251,8 +1240,10 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
 
     // End.
     _command_buffers[_current_frame]->endRenderPass();
-    auto result_end = _command_buffers[_current_frame]->end();
-    v_assert(result_end == s_success, "Failed to record cmd buffer.");
+    _vk_expect(
+        _command_buffers[_current_frame]->end(),
+        "Failed to record cmd buffer."
+    );
 
     Log::info(Log::LIGHT_GREEN, "Command Buffer recording completed.");
 }
@@ -1272,31 +1263,20 @@ VulkanRenderer::_create_sync_objects() noexcept {
     };
 
     for (usize i {}; i < s_max_frames_in_flight; ++i) {
-        auto [result1, image_available_semaphore] =
-            _device->createSemaphoreUnique(semaphore_info);
-        v_assert(
-            result1 == s_success,
+        _image_available_semaphores[i] = _vk_expect(
+            _device->createSemaphoreUnique(semaphore_info),
             "Failed to create Image Available Semaphore."
         );
 
-        auto [result2, render_finished_semaphore] =
-            _device->createSemaphoreUnique(semaphore_info);
-        v_assert(
-            result2 == s_success,
+        _render_finished_semapahores[i] = _vk_expect(
+            _device->createSemaphoreUnique(semaphore_info),
             "Failed to create Render Finished Semaphore."
         );
 
-        _image_available_semaphores[i] = std::move(image_available_semaphore);
-        _render_finished_semapahores[i] = std::move(render_finished_semaphore);
-
-        auto [result3, frame_in_flight_fence] =
-            _device->createFenceUnique(fence_info);
-        v_assert(
-            result3 == s_success,
+        _frame_in_flight_fences[i] = _vk_expect(
+            _device->createFenceUnique(fence_info),
             "Failed to create Frame In Flight Fence"
         );
-
-        _frame_in_flight_fences[i] = std::move(frame_in_flight_fence);
     }
 };
 
@@ -1331,30 +1311,36 @@ VulkanRenderer::_draw_frame() noexcept {
     // in first frame.
     constexpr vk::Bool32 wait_for_all {vk::True};
     constexpr u64 time_out_ns {std::numeric_limits<u64>::max()};
-    auto result_wait = _device->waitForFences(
-        *_frame_in_flight_fences[_current_frame],
-        wait_for_all,
-        time_out_ns
-    );
-    v_assert(
-        result_wait == s_success,
+    _vk_expect(
+        _device->waitForFences(
+            *_frame_in_flight_fences[_current_frame],
+            wait_for_all,
+            time_out_ns
+        ),
         "Failed to wait for frame in flight fence."
     );
 
-    auto [result, image_index] = _device->acquireNextImageKHR(
-        *_swap_chain,
-        time_out_ns,
-        *_image_available_semaphores[_current_frame],
-        nullptr
+    auto image_index = _vk_expect(
+        _device->acquireNextImageKHR(
+            *_swap_chain,
+            time_out_ns,
+            *_image_available_semaphores[_current_frame],
+            nullptr
+        ),
+        "Failed to acquire image from swapchain."
     );
-    v_assert(result == s_success, "Failed to acquire image from swapchain.");
 
     // Reset fence for next frame.
-    _device->resetFences(*_frame_in_flight_fences[_current_frame]);
+    _vk_expect(
+        _device->resetFences(*_frame_in_flight_fences[_current_frame]),
+        "Failed to reset frame in flight fence."
+    );
 
     // Make sure cmd buffer is in default state.
-    auto result_reset = _command_buffers[_current_frame]->reset();
-    v_assert(result_reset == s_success, "Failed to reset cmd buffer");
+    _vk_expect(
+        _command_buffers[_current_frame]->reset(),
+        "Failed to reset cmd buffer"
+    );
 
     // Draw to the image :)
     _record_command_buffer(image_index);
@@ -1381,11 +1367,11 @@ VulkanRenderer::_draw_frame() noexcept {
         .pSignalSemaphores = signal_semaphores.data(),
     };
 
-    auto result_submit = _graphics_queue.submit(
-        submit_info,
-        *_frame_in_flight_fences[_current_frame]
+    _vk_expect(
+        _graphics_queue
+            .submit(submit_info, *_frame_in_flight_fences[_current_frame]),
+        "Failed to submit to graphics queue"
     );
-    v_assert(result_submit == s_success, "Failed to submit to graphics queue");
 
     // Presentation.
     std::array const swap_chains = {*_swap_chain};
@@ -1463,7 +1449,7 @@ _find_memory_type(
         }
     }
 
-    v_assert(false, "Failed to find suitable memory type.");
+    core_assert(false, "Failed to find suitable memory type.");
     return -1;
 }
 
@@ -1479,16 +1465,19 @@ VulkanRenderer::_copy_buffer(
         .commandBufferCount = 1,
     };
 
-    auto [result, cmd_buffer] =
-        _device->allocateCommandBuffersUnique(alloc_info);
-    v_assert(result == s_success, "Failed to allocate Cmd buffer.");
+    auto cmd_buffer = _vk_expect(
+        _device->allocateCommandBuffersUnique(alloc_info),
+        "Failed to allocate Cmd buffer."
+    );
 
     constexpr vk::CommandBufferBeginInfo begin_info {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
 
-    auto result_begin = cmd_buffer[0]->begin(begin_info);
-    v_assert(result_begin == s_success, "Failed to begin command buffer.");
+    _vk_expect(
+        cmd_buffer[0]->begin(begin_info),
+        "Failed to begin command buffer."
+    );
 
     vk::BufferCopy const copy_region {
         .srcOffset = 0, // Optional.
@@ -1498,19 +1487,22 @@ VulkanRenderer::_copy_buffer(
 
     cmd_buffer[0]->copyBuffer(*src_buffer, *dst_buffer, copy_region);
 
-    auto result_end = cmd_buffer[0]->end();
-    v_assert(result_end == s_success, "Failed to end command buffer.");
+    _vk_expect(cmd_buffer[0]->end(), "Failed to end command buffer.");
 
     vk::SubmitInfo const submit_info {
         .commandBufferCount = 1,
         .pCommandBuffers = &(*cmd_buffer[0]),
     };
 
-    auto result_submit = _graphics_queue.submit(submit_info);
-    v_assert(result_submit == s_success, "Failed to submit command buffer.");
+    _vk_expect(
+        _graphics_queue.submit(submit_info),
+        "Failed to submit command buffer."
+    );
 
-    auto result_wait = _graphics_queue.waitIdle();
-    v_assert(result_wait == s_success, "Failed to wait for graphics queue.");
+    _vk_expect(
+        _graphics_queue.waitIdle(),
+        "Failed to wait for graphics queue."
+    );
 }
 
 void
@@ -1527,9 +1519,10 @@ VulkanRenderer::_create_buffer_unique(
         .sharingMode = vk::SharingMode::eExclusive,
     };
 
-    auto [result, unique_buffer] = _device->createBufferUnique(buffer_info);
-    v_assert(result == s_success, "Failed to create buffer");
-    buffer = std::move(unique_buffer);
+    buffer = _vk_expect(
+        _device->createBufferUnique(buffer_info),
+        "Failed to create buffer"
+    );
 
     auto const& buffer_mem_requirements =
         _device->getBufferMemoryRequirements(*buffer);
@@ -1543,9 +1536,10 @@ VulkanRenderer::_create_buffer_unique(
         ),
     };
 
-    auto [result_alloc, mem] = _device->allocateMemoryUnique(alloc_info);
-    v_assert(result_alloc == s_success, "Failed to allocate buffer memory.");
-    buffer_memory = std::move(mem);
+    buffer_memory = _vk_expect(
+        _device->allocateMemoryUnique(alloc_info),
+        "Failed to allocate buffer memory."
+    );
 
     // Bind buffer.
     // Since the memory is allocated specifically for this buffer,
@@ -1554,27 +1548,19 @@ VulkanRenderer::_create_buffer_unique(
     // That can be check using: if (mem_requirements.aligment % mem_offset == 0).
     // Note: vk::DeviceSize is 64-bits.
     constexpr vk::DeviceSize mem_offset {0UL};
-    auto result_bind =
-        _device->bindBufferMemory(*buffer, *buffer_memory, mem_offset);
-    v_assert(result_bind == s_success, "Failed to bind buffer.");
+    _vk_expect(
+        _device->bindBufferMemory(*buffer, *buffer_memory, mem_offset),
+        "Failed to bind buffer."
+    );
 }
 
 void
 VulkanRenderer::_create_vertex_buffer() noexcept {
     Log::header("Creating Vertex Buffer.");
-    // Enough space to save all vertices.
     vk::DeviceSize const buffer_size = sizeof(_vertices[0]) * _vertices.size();
     Log::info("Vertex Buffer size: ", buffer_size);
 
-    // TransferSrc: Buffer can be used as source in a memory transfer operation.
     constexpr auto staging_usage = vk::BufferUsageFlagBits::eTransferSrc;
-    // Host visible: Memory is accessible from CPU, but must be flushed. (lives in RAM)
-    // Host coherent: Memory is accessible from CPU, and it's synced to GPU. (lives in RAM)
-    // DeviceLocal: Memory is NOT accessible from CPU, (lives in V-RAM).
-    // HostCached: Memory is accessible and cached in CPU, but cannot be coherent.
-    // We want to modify vertex data from the CPU in the main render loop.
-    // and we want it to be immediately synced in the GPU.
-    // This is costly but for now it's okay.
     constexpr auto staging_properties =
         vk::MemoryPropertyFlagBits::eHostVisible |
         vk::MemoryPropertyFlagBits::eHostCoherent;
@@ -1592,16 +1578,15 @@ VulkanRenderer::_create_vertex_buffer() noexcept {
     );
     Log::info("Vertex Staging Buffer created.");
 
-    // Fill staging buffer.
-    auto [result_map, data] = _device->mapMemory(
-        *staging_buffer_memory,
-        0, // Offset.
-        buffer_size
+    constexpr vk::DeviceSize offset {0};
+    auto [result_map, data] =
+        _device->mapMemory(*staging_buffer_memory, offset, buffer_size);
+    core_assert(
+        result_map == s_success,
+        "Failed to map Staging Buffer memory."
     );
-    v_assert(result_map == s_success, "Failed to map Staging Buffer memory.");
     Log::info("Vertex Staging Buffer memory mapped.");
 
-    // Copy memory to GPU.
     std::memcpy(data, _vertices.data(), static_cast<usize>(buffer_size));
     Log::info("Vertex Staging Buffer data copied to GPU.");
 
@@ -1651,9 +1636,10 @@ VulkanRenderer::_create_index_buffer() noexcept {
     Log::info("Index Staging Buffer created.");
 
     constexpr vk::DeviceSize offset {0};
-    auto [result_map, data] =
-        _device->mapMemory(*staging_buffer_memory, offset, buffer_size);
-    v_assert(result_map == s_success, "Failed to map Staging Buffer memory.");
+    void* data = _vk_expect(
+        _device->mapMemory(*staging_buffer_memory, offset, buffer_size),
+        "Failed to map Staging Buffer Memory."
+    );
     Log::info("Index Staging Buffer memory mapped.");
 
     std::memcpy(data, _indices.data(), static_cast<usize>(buffer_size));

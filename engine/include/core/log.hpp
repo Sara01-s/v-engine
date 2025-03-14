@@ -314,7 +314,7 @@ private:
 };
 
 [[maybe_unused]] static void
-v_assert(bool statement, char const* message) noexcept {
+core_assert(bool statement, char const* message) noexcept {
     if (statement) {
         return;
     }

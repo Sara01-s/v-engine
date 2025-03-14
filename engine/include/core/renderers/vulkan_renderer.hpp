@@ -194,7 +194,7 @@ private:
     vk::UniqueDeviceMemory _index_buffer_memory {nullptr};
     std::array<Vertex, 4> _vertices = {
         Vertex {.position = {-0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
-        Vertex {.position = {0.5f, -0.5f}, .color = {1.0f, 0.1f, 0.0f}},
+        Vertex {.position = {0.5f, -0.5f}, .color = {0.0f, 1.0f, 0.0f}},
         Vertex {.position = {0.5, 0.5}, .color = {0.0f, 0.0f, 1.0f}},
         Vertex {.position = {-0.5, 0.5}, .color = {1.0f, 1.0f, 1.0f}},
     };
@@ -211,7 +211,7 @@ read_file_bin(std::string const& file_name) noexcept {
     // Start reading file from the end and read it as binary data.
     std::ifstream file(file_name, std::ios::ate | std::ios::binary);
 
-    v_assert(file.is_open(), "Failed to open file");
+    core_assert(file.is_open(), "Failed to open file");
 
     // Since we started at the end, we can tell the file size :).
     usize const file_size = static_cast<usize>(file.tellg());
