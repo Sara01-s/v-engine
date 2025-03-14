@@ -57,6 +57,7 @@ private:
         _create_framebuffers();
         _create_command_pool();
         _create_vertex_buffer();
+        _create_index_buffer();
         _create_command_buffers();
         _create_sync_objects();
     }
@@ -110,6 +111,9 @@ private:
     _create_vertex_buffer() noexcept;
 
     void
+    _create_index_buffer() noexcept;
+
+    void
     _record_command_buffer(u32 const image_index) noexcept;
 
     void
@@ -146,7 +150,6 @@ private:
     // PhysicalDevice is implicitaly destroyed when _vk_instance is destroyed.
     vk::PhysicalDevice _physical_device {nullptr};
     vk::UniqueDevice _device {nullptr}; // LOGICAL device.
-    // Device is implicitaly destroyed when _devie is destroyed.
     vk::Queue _graphics_queue {nullptr};
     vk::Queue _present_queue {nullptr};
 
@@ -187,16 +190,24 @@ private:
     // Drawables.
     vk::UniqueBuffer _vertex_buffer {nullptr};
     vk::UniqueDeviceMemory _vertex_buffer_memory {nullptr};
-    std::array<Vertex, 3> _vertices = {
-        Vertex {.position = {0.0f, -0.5f}, .color = {1.0f, 0.0f, 0.5f}},
-        Vertex {.position = {0.5f, 0.5f}, .color = {1.0f, 0.5f, 0.0f}},
-        Vertex {.position = {-0.5, 0.5}, .color = {0.0f, 0.0f, 1.0f}},
+    vk::UniqueBuffer _index_buffer {nullptr};
+    vk::UniqueDeviceMemory _index_buffer_memory {nullptr};
+    std::array<Vertex, 4> _vertices = {
+        Vertex {.position = {-0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
+        Vertex {.position = {0.5f, -0.5f}, .color = {1.0f, 0.1f, 0.0f}},
+        Vertex {.position = {0.5, 0.5}, .color = {0.0f, 0.0f, 1.0f}},
+        Vertex {.position = {-0.5, 0.5}, .color = {1.0f, 1.0f, 1.0f}},
     };
-};
+
+    // Interestingly, The book "Game Engine Architecture" by Jason Gregory.
+    // (2007), says that index buffers should be composed of 16-bit indices.
+    std::array<u16, 6> _indices = {0, 1, 2, 2, 3, 0};
+
+}; // namespace core
 
 // Helper function to read shader files.
 [[maybe_unused]] static std::vector<c8>
-read_file(std::string const& file_name) noexcept {
+read_file_bin(std::string const& file_name) noexcept {
     // Start reading file from the end and read it as binary data.
     std::ifstream file(file_name, std::ios::ate | std::ios::binary);
 
@@ -204,7 +215,7 @@ read_file(std::string const& file_name) noexcept {
 
     // Since we started at the end, we can tell the file size :).
     usize const file_size = static_cast<usize>(file.tellg());
-    std::vector<c8> buffer(file_size);
+    std::vector<c8> buffer(file_size); // FIXME - change to array.
 
     file.seekg(0); // Move read pointer to beggining.
     file.read(buffer.data(), file_size); // Write data to buffer.

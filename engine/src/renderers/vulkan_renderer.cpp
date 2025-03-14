@@ -801,6 +801,7 @@ VulkanRenderer::_create_render_pass() noexcept {
 
         // Wait for this operations to occur.
         .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        .dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
         .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
     };
 
@@ -827,13 +828,13 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
 
     // Set up shaders.
     // FIXME - Use non-harcoded absolute filepath.
-    auto vert_shader_code = read_file(
+    auto vert_shader_code = read_file_bin(
         "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_vert.spv"
     );
     Log::info("Loaded vert shader code.");
     Log::sub_info("Size: ", vert_shader_code.size());
 
-    auto frag_shader_code = read_file(
+    auto frag_shader_code = read_file_bin(
         "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_frag.spv"
     );
     Log::info("Loaded frag shader code.");
@@ -1228,15 +1229,23 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
     _command_buffers[_current_frame]
         ->bindVertexBuffers(first_binding, vertex_buffers, offsets);
 
-    usize const vertex_size = _vertices.size();
-    u32 const vertex_count = static_cast<u32>(vertex_size);
-    constexpr u32 instance_count {3};
-    constexpr u32 first_vertex {0}; // Defines min value of gl_VertexIndex.
+    _command_buffers[_current_frame]
+        ->bindIndexBuffer(*_index_buffer, 0, vk::IndexType::eUint16);
+
+    u32 const index_count = static_cast<u32>(_indices.size());
+    constexpr u32 instance_count {1};
+    constexpr u32 first_index {0};
     constexpr u32 first_instance {0};
+    constexpr u32 offset {0};
 
     // D-D-D-Draaaaaaaawww call!!!!!!
-    _command_buffers[_current_frame]
-        ->draw(vertex_count, instance_count, first_vertex, first_instance);
+    _command_buffers[_current_frame]->drawIndexed(
+        index_count,
+        instance_count,
+        first_index,
+        offset,
+        first_instance
+    );
 
     Log::info("Draw command issued.");
 
@@ -1449,7 +1458,7 @@ _find_memory_type(
 
         if ((mem_type_filter & test_mask) &&
             (mem_property_flags & properties) == properties) {
-            Log::info("Suitable memory type found: ", i);
+            Log::info("Suitable memory type found: ", i, ".");
             return i;
         }
     }
@@ -1555,6 +1564,8 @@ VulkanRenderer::_create_vertex_buffer() noexcept {
     Log::header("Creating Vertex Buffer.");
     // Enough space to save all vertices.
     vk::DeviceSize const buffer_size = sizeof(_vertices[0]) * _vertices.size();
+    Log::info("Vertex Buffer size: ", buffer_size);
+
     // TransferSrc: Buffer can be used as source in a memory transfer operation.
     constexpr auto staging_usage = vk::BufferUsageFlagBits::eTransferSrc;
     // Host visible: Memory is accessible from CPU, but must be flushed. (lives in RAM)
@@ -1579,6 +1590,7 @@ VulkanRenderer::_create_vertex_buffer() noexcept {
         staging_buffer,
         staging_buffer_memory
     );
+    Log::info("Vertex Staging Buffer created.");
 
     // Fill staging buffer.
     auto [result_map, data] = _device->mapMemory(
@@ -1587,19 +1599,19 @@ VulkanRenderer::_create_vertex_buffer() noexcept {
         buffer_size
     );
     v_assert(result_map == s_success, "Failed to map Staging Buffer memory.");
-    Log::info("Staging Buffer memory mapped.");
+    Log::info("Vertex Staging Buffer memory mapped.");
 
     // Copy memory to GPU.
     std::memcpy(data, _vertices.data(), static_cast<usize>(buffer_size));
-    Log::info("Staging Buffer data copied to GPU.");
+    Log::info("Vertex Staging Buffer data copied to GPU.");
 
     _device->unmapMemory(*staging_buffer_memory);
-    Log::info("Staging Buffer memory unmapped.");
+    Log::info("Vertex Staging Buffer memory unmapped.");
 
-    // TransferDst: Buffer can be used as destination in a memory transfer operation.
     constexpr auto vertex_usage = vk::BufferUsageFlagBits::eTransferDst |
         vk::BufferUsageFlagBits::eVertexBuffer;
     constexpr auto vertex_properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
+
     // Create Vertex Buffer.
     _create_buffer_unique(
         buffer_size,
@@ -1608,8 +1620,63 @@ VulkanRenderer::_create_vertex_buffer() noexcept {
         _vertex_buffer,
         _vertex_buffer_memory
     );
+    Log::info("Vertex Buffer created.");
 
     _copy_buffer(staging_buffer, _vertex_buffer, buffer_size);
+    Log::info("Vertex Buffer data copied from Staging Buffer.");
+}
+
+void
+VulkanRenderer::_create_index_buffer() noexcept {
+    Log::header("Creating Index Buffer.");
+    vk::DeviceSize const buffer_size = sizeof(_indices[0]) * _indices.size();
+    Log::info("Index Buffer size: ", buffer_size);
+
+    constexpr auto staging_usage = vk::BufferUsageFlagBits::eTransferSrc;
+    constexpr auto staging_properties =
+        vk::MemoryPropertyFlagBits::eHostVisible |
+        vk::MemoryPropertyFlagBits::eHostCoherent;
+
+    vk::UniqueBuffer staging_buffer {};
+    vk::UniqueDeviceMemory staging_buffer_memory {};
+
+    // Create Staging Buffer.
+    _create_buffer_unique(
+        buffer_size,
+        staging_usage,
+        staging_properties,
+        staging_buffer,
+        staging_buffer_memory
+    );
+    Log::info("Index Staging Buffer created.");
+
+    constexpr vk::DeviceSize offset {0};
+    auto [result_map, data] =
+        _device->mapMemory(*staging_buffer_memory, offset, buffer_size);
+    v_assert(result_map == s_success, "Failed to map Staging Buffer memory.");
+    Log::info("Index Staging Buffer memory mapped.");
+
+    std::memcpy(data, _indices.data(), static_cast<usize>(buffer_size));
+    Log::info("Index Staging Buffer data copied to GPU.");
+
+    _device->unmapMemory(*staging_buffer_memory);
+    Log::info("Index Staging Buffer memory unmapped.");
+
+    constexpr auto index_usage = vk::BufferUsageFlagBits::eTransferDst |
+        vk::BufferUsageFlagBits::eIndexBuffer;
+    constexpr auto index_properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
+
+    // Create Index Buffer.
+    _create_buffer_unique(
+        buffer_size,
+        index_usage,
+        index_properties,
+        _index_buffer,
+        _index_buffer_memory
+    );
+    Log::info("Index Buffer created.");
+
+    _copy_buffer(staging_buffer, _index_buffer, buffer_size);
 }
 
 #pragma endregion BUFFERS
