@@ -1,7 +1,10 @@
 #include <core/renderers/vulkan_renderer.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm> // clamp.
 #include <array>
+#include <chrono>
 #include <cstring> // strcmp.
 #include <filesystem>
 #include <limits>
@@ -76,7 +79,6 @@ VulkanRenderer::render() noexcept {
 #pragma endregion PUBLIC_GFX_API
 
 // PRIVATE.
-
 #pragma region VULKAN_INSTANCE
 
 bool
@@ -515,28 +517,30 @@ VulkanRenderer::_create_image_views() noexcept {
     _swap_chain_image_views.resize(_swap_chain_images.size());
 
     for (usize i {}; i < _swap_chain_images.size(); ++i) {
-        vk::ImageViewCreateInfo image_view_create_info {
+        vk::ImageViewCreateInfo const image_view_info {
             .image = _swap_chain_images[i],
             .viewType = vk::ImageViewType::e2D,
             .format = _swap_chain_image_format,
+            // Default color components mapping.
+            .components =
+                {
+                    .r = vk::ComponentSwizzle::eIdentity,
+                    .g = vk::ComponentSwizzle::eIdentity,
+                    .b = vk::ComponentSwizzle::eIdentity,
+                    .a = vk::ComponentSwizzle::eIdentity,
+                },
+            .subresourceRange =
+                {
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
         };
 
-        // Use images as color targets, without mipmaps and multiple layers.
-        image_view_create_info.subresourceRange.aspectMask =
-            vk::ImageAspectFlagBits::eColor;
-        image_view_create_info.subresourceRange.baseMipLevel = 0;
-        image_view_create_info.subresourceRange.levelCount = 1;
-        image_view_create_info.subresourceRange.baseArrayLayer = 0;
-        image_view_create_info.subresourceRange.layerCount = 1;
-
-        // Default color components mapping.
-        image_view_create_info.components.r = vk::ComponentSwizzle::eIdentity;
-        image_view_create_info.components.g = vk::ComponentSwizzle::eIdentity;
-        image_view_create_info.components.b = vk::ComponentSwizzle::eIdentity;
-        image_view_create_info.components.a = vk::ComponentSwizzle::eIdentity;
-
         auto image_view = _vk_expect(
-            _device->createImageViewUnique(image_view_create_info),
+            _device->createImageViewUnique(image_view_info),
             "Failed to create unique image view."
         );
 
@@ -739,6 +743,107 @@ VulkanRenderer::_create_logical_device() noexcept {
 
 #pragma endregion LOGICAL_DEVICE
 
+#pragma region DESCRIPTORS
+
+void
+VulkanRenderer::_create_descriptor_set_layout() noexcept {
+    constexpr vk::DescriptorSetLayoutBinding ubo_layout_binding {
+        // This binding is used in vertex shader.
+        // layout (binding = 0) uniform UBO...
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        // Stages in which the descriptor is going to be referenced.
+        .stageFlags = vk::ShaderStageFlagBits::eVertex,
+        .pImmutableSamplers = nullptr, // Optional. (for image sampling).
+    };
+
+    vk::DescriptorSetLayoutCreateInfo const layout_info {
+        .bindingCount = 1,
+        .pBindings = &ubo_layout_binding,
+    };
+
+    _descriptor_set_layout = _vk_expect(
+        _device->createDescriptorSetLayoutUnique(layout_info),
+        "Failed to create Descriptor Set Layout."
+    );
+}
+
+void
+VulkanRenderer::_create_descriptor_pool() noexcept {
+    constexpr vk::DescriptorPoolSize pool_size {
+        .descriptorCount = s_max_frames_in_flight
+    };
+
+    vk::DescriptorPoolCreateInfo const pool_info {
+        .flags = {},
+        .maxSets = s_max_frames_in_flight,
+        .poolSizeCount = 1,
+        .pPoolSizes = &pool_size,
+    };
+
+    _descriptor_pool = _vk_expect(
+        _device->createDescriptorPoolUnique(pool_info),
+        "Failed to create Descriptor Pool."
+    );
+};
+
+void
+VulkanRenderer::_create_descriptor_sets() noexcept {
+    std::vector<vk::DescriptorSetLayout> const layouts(
+        s_max_frames_in_flight,
+        *_descriptor_set_layout
+    );
+
+    vk::DescriptorSetAllocateInfo const alloc_info {
+        .descriptorPool = *_descriptor_pool,
+        .descriptorSetCount = s_max_frames_in_flight,
+        .pSetLayouts = layouts.data(),
+    };
+
+    // Create one descriptor set for each frame in flight.
+    auto [result, descriptor_sets] =
+        _device->allocateDescriptorSetsUnique(alloc_info);
+    core_assert(result == s_success, "Failed to allocate Descriptor Sets.");
+
+    std::move(
+        descriptor_sets.begin(),
+        descriptor_sets.end(),
+        _descriptor_sets.data()
+    );
+
+    // The descriptor sets have been allocated.
+    // Now we need to configure the descriptor within them.
+    for (usize i {}; i < s_max_frames_in_flight; ++i) {
+        vk::DescriptorBufferInfo const descriptor_buffer_info {
+            .buffer = *_uniform_buffers[i],
+            .offset = 0,
+            // If you're overwriting the whole buffer, like we are in this case,
+            // then it is also possible to use the vk::WholeSize value for the range.
+            .range = sizeof(UniformBufferObject)
+        };
+
+        vk::WriteDescriptorSet const descriptor_write {
+            // Descriptor set to update and it's binding.
+            .dstSet = *_descriptor_sets[i],
+            .dstBinding = 0,
+            // Descriptor could be an array (not in this case).
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eUniformBuffer,
+            .pImageInfo = nullptr, // Optional.
+            .pBufferInfo = &descriptor_buffer_info,
+            .pTexelBufferView = nullptr, // Optional.
+        };
+
+        // We can pass an array to make copies of the descriptor set.
+        // But not for now so we set it as nullptr.
+        _device->updateDescriptorSets(descriptor_write, nullptr);
+    }
+}
+
+#pragma endregion DESCRIPTORS
+
 #pragma region GRAPHICS_PIPELINE
 
 vk::UniqueShaderModule
@@ -925,7 +1030,7 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
         .polygonMode = vk::PolygonMode::eFill, // Fill polygons with fragments.
         // Culling.
         .cullMode = vk::CullModeFlagBits::eBack,
-        .frontFace = vk::FrontFace::eClockwise,
+        .frontFace = vk::FrontFace::eCounterClockwise,
         // Depth.
         .depthBiasEnable = vk::False,
         .depthBiasConstantFactor = 0.0f, // Optional.
@@ -993,10 +1098,10 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     color_blending.blendConstants[3] = 0.0f; // Optional.
 
     // Pipeline Layout.
-    // Empty for now.
-    constexpr vk::PipelineLayoutCreateInfo pipeline_layout_info {
-        .setLayoutCount = 0, // Optional.
-        .pSetLayouts = nullptr, // Optional.
+    vk::PipelineLayoutCreateInfo const pipeline_layout_info {
+        // Uniform buffer object.
+        .setLayoutCount = 1,
+        .pSetLayouts = &(*_descriptor_set_layout),
         .pushConstantRangeCount = 0, // Optional.
         .pPushConstantRanges = nullptr, // Optional.
     };
@@ -1125,8 +1230,6 @@ VulkanRenderer::_create_command_buffers() noexcept {
 
 void
 VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
-    Log::header("Recording Command Buffer.");
-
     constexpr vk::CommandBufferBeginInfo begin_info {
         // Possible Flags:
         // vk::CommandBufferUsageFlagBits::eOneTimeSubmit
@@ -1145,8 +1248,6 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
         _command_buffers[_current_frame]->begin(begin_info),
         "Failed to begin cmd record"
     );
-
-    Log::info("Command Buffer recording started.");
 
     constexpr vk::ClearValue clear_value {
         vk::ClearColorValue {std::array {0.0f, 0.05f, 0.1f, 1.0f}}
@@ -1172,8 +1273,6 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
         vk::SubpassContents::eInline // For primary commands.
     );
 
-    Log::info("Render pass started.");
-
     // Let's start drawing!
     // Note: All vkCmds return void.
 
@@ -1182,8 +1281,6 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
         vk::PipelineBindPoint::eGraphics,
         *_graphics_pipeline
     );
-
-    Log::info("Graphics pipeline bound.");
 
     // Viewport and scissor are dynamic pipeline states :D
     vk::Viewport viewport {
@@ -1198,8 +1295,6 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
     constexpr u32 first_viewport {0};
     _command_buffers[_current_frame]->setViewport(first_viewport, viewport);
 
-    Log::info("Viewport set.");
-
     vk::Rect2D scissor {
         .offset = {0, 0},
         .extent = _swap_chain_extent,
@@ -1207,8 +1302,6 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
 
     constexpr u32 first_scissor {0};
     _command_buffers[_current_frame]->setScissor(first_scissor, scissor);
-
-    Log::info("Scissor set.");
 
     // Vertex Buffers.
     std::array const vertex_buffers {*_vertex_buffer};
@@ -1221,22 +1314,25 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
     _command_buffers[_current_frame]
         ->bindIndexBuffer(*_index_buffer, 0, vk::IndexType::eUint16);
 
-    u32 const index_count = static_cast<u32>(_indices.size());
-    constexpr u32 instance_count {1};
-    constexpr u32 first_index {0};
-    constexpr u32 first_instance {0};
-    constexpr u32 offset {0};
-
-    // D-D-D-Draaaaaaaawww call!!!!!!
-    _command_buffers[_current_frame]->drawIndexed(
-        index_count,
-        instance_count,
-        first_index,
-        offset,
-        first_instance
+    _command_buffers[_current_frame]->bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        *_pipeline_Layout,
+        0, // First set.
+        1, // Descriptor set count.
+        &(*_descriptor_sets[_current_frame]),
+        0, // Dynamic offset count.
+        nullptr // Dynamic offsets.
     );
 
-    Log::info("Draw command issued.");
+    // D-D-D-Draaaaaaaawww call!!!!!!
+    u32 const index_count = static_cast<u32>(_indices.size());
+    _command_buffers[_current_frame]->drawIndexed(
+        index_count,
+        1, // Instance count.
+        0, // First Index.
+        0, // Offset.
+        0 // First Instance.
+    );
 
     // End.
     _command_buffers[_current_frame]->endRenderPass();
@@ -1244,8 +1340,6 @@ VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
         _command_buffers[_current_frame]->end(),
         "Failed to record cmd buffer."
     );
-
-    Log::info(Log::LIGHT_GREEN, "Command Buffer recording completed.");
 }
 
 #pragma endregion COMMANDS
@@ -1344,6 +1438,8 @@ VulkanRenderer::_draw_frame() noexcept {
 
     // Draw to the image :)
     _record_command_buffer(image_index);
+
+    _update_uniform_buffer(_current_frame);
 
     std::array const wait_semaphores = {
         *_image_available_semaphores[_current_frame]
@@ -1665,5 +1761,72 @@ VulkanRenderer::_create_index_buffer() noexcept {
     _copy_buffer(staging_buffer, _index_buffer, buffer_size);
 }
 
+void
+VulkanRenderer::_create_uniform_buffers() noexcept {
+    constexpr vk::DeviceSize buffer_size = sizeof(UniformBufferObject);
+
+    for (usize i {}; i < s_max_frames_in_flight; ++i) {
+        _create_buffer_unique(
+            buffer_size,
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            _uniform_buffers[i],
+            _uniform_buffers_memory[i]
+        );
+
+        constexpr u32 offset {0};
+        _uniform_buffers_mapped[i] = _vk_expect(
+            // Persistent mapping.
+            _device
+                ->mapMemory(*_uniform_buffers_memory[i], offset, buffer_size),
+            "Failed to map memory for uniform buffer object."
+        );
+    }
+}
+
+void
+VulkanRenderer::_update_uniform_buffer(u32 const current_image) noexcept {
+    using clock = std::chrono::high_resolution_clock;
+    using period = std::chrono::seconds::period;
+    static auto start_time = clock::now();
+
+    auto current_time = clock::now();
+    f32 time =
+        std::chrono::duration<f32, period>(current_time - start_time).count();
+
+    UniformBufferObject ubo {};
+    // Model matrix it's a simple rotation around de Z-axis.
+    ubo.model = glm::rotate(
+        glm::mat4(1.0f),
+        time * glm::radians(90.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f)
+    );
+
+    // View matrix it's simply a view from above at a 45 degree angle.
+    ubo.view = glm::lookAt(
+        glm::vec3(2.0f, 2.0f, 2.0f),
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f)
+    );
+
+    f32 const aspect_ratio =
+        _swap_chain_extent.width / static_cast<f32>(_swap_chain_extent.height);
+    constexpr f32 near {0.1f};
+    constexpr f32 far {100.0f};
+    constexpr f32 vertical_fov = glm::radians(45.0f);
+    ubo.projection = glm::perspective(vertical_fov, aspect_ratio, near, far);
+    /* GLM was originally designed for OpenGL, where the Y coordinate of the clip 
+       coordinates is inverted. The easiest way to compensate for that is to flip 
+       the sign on the scaling factor of the Y axis in the projection matrix.
+        If you don’t do this, then the image will be rendered upside down.
+    */
+    ubo.projection[1][1] *= -1;
+
+    // Remember ubo memory uses persistent mapping.
+    std::memcpy(_uniform_buffers_mapped[current_image], &ubo, sizeof(ubo));
+}
+
 #pragma endregion BUFFERS
+
 } // namespace core

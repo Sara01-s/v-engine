@@ -53,11 +53,15 @@ private:
         _create_swap_chain();
         _create_image_views();
         _create_render_pass();
+        _create_descriptor_set_layout();
         _create_graphics_pipeline();
         _create_framebuffers();
         _create_command_pool();
         _create_vertex_buffer();
         _create_index_buffer();
+        _create_uniform_buffers();
+        _create_descriptor_pool();
+        _create_descriptor_sets();
         _create_command_buffers();
         _create_sync_objects();
     }
@@ -93,6 +97,15 @@ private:
     _create_render_pass() noexcept;
 
     void
+    _create_descriptor_set_layout() noexcept;
+
+    void
+    _create_descriptor_pool() noexcept;
+
+    void
+    _create_descriptor_sets() noexcept;
+
+    void
     _create_graphics_pipeline() noexcept;
 
     void
@@ -112,6 +125,12 @@ private:
 
     void
     _create_index_buffer() noexcept;
+
+    void
+    _create_uniform_buffers() noexcept;
+
+    void
+    _update_uniform_buffer(u32 const current_image) noexcept;
 
     void
     _record_command_buffer(u32 const image_index) noexcept;
@@ -138,7 +157,10 @@ private:
 #else
     static constexpr bool s_enable_validation_layers {true};
 #endif
-    static constexpr u32 s_max_frames_in_flight {2};
+    static constexpr u32 s_max_frames_in_flight {2U};
+
+    template <typename T>
+    using PerFrameArray = std::array<T, s_max_frames_in_flight>;
 
     u32 _current_frame {0};
     bool _framebuffer_resized {false};
@@ -164,6 +186,9 @@ private:
 
     // Render Pipeline.
     vk::UniqueRenderPass _render_pass {nullptr};
+    vk::UniqueDescriptorSetLayout _descriptor_set_layout {nullptr};
+    vk::UniqueDescriptorPool _descriptor_pool {nullptr};
+    PerFrameArray<vk::UniqueDescriptorSet> _descriptor_sets {};
     vk::UniquePipelineLayout _pipeline_Layout {nullptr};
     vk::UniquePipeline _graphics_pipeline {nullptr};
 
@@ -172,26 +197,27 @@ private:
 
     // Commands.
     vk::UniqueCommandPool _command_pool {nullptr};
-    std::array<vk::UniqueCommandBuffer, s_max_frames_in_flight>
-        _command_buffers {};
+    PerFrameArray<vk::UniqueCommandBuffer> _command_buffers {};
 
     // Sync objetcs.
     // An image has been acquired from the swapchain and is ready for redering.
-    std::array<vk::UniqueSemaphore, s_max_frames_in_flight>
-        _image_available_semaphores {};
+    PerFrameArray<vk::UniqueSemaphore> _image_available_semaphores {};
     // Rendering has finished and presentation can happen.
-    std::array<vk::UniqueSemaphore, s_max_frames_in_flight>
-        _render_finished_semapahores {};
+    PerFrameArray<vk::UniqueSemaphore> _render_finished_semapahores {};
     // Indicates if a frames is currentyl rendering.
     // (to make sure only one frame is rendering at a time).
-    std::array<vk::UniqueFence, s_max_frames_in_flight>
-        _frame_in_flight_fences {};
+    PerFrameArray<vk::UniqueFence> _frame_in_flight_fences {};
 
-    // Drawables.
+    // Buffers.
     vk::UniqueBuffer _vertex_buffer {nullptr};
     vk::UniqueDeviceMemory _vertex_buffer_memory {nullptr};
     vk::UniqueBuffer _index_buffer {nullptr};
     vk::UniqueDeviceMemory _index_buffer_memory {nullptr};
+    PerFrameArray<vk::UniqueBuffer> _uniform_buffers {};
+    PerFrameArray<vk::UniqueDeviceMemory> _uniform_buffers_memory {};
+    PerFrameArray<void*> _uniform_buffers_mapped {};
+
+    // Data to draw.
     std::array<Vertex, 4> _vertices = {
         Vertex {.position = {-0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
         Vertex {.position = {0.5f, -0.5f}, .color = {0.0f, 1.0f, 0.0f}},

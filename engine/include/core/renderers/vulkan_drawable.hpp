@@ -7,6 +7,12 @@
 
 namespace core {
 
+struct UniformBufferObject {
+    glm::mat4 model {};
+    glm::mat4 view {};
+    glm::mat4 projection {};
+};
+
 struct Vertex {
     glm::vec2 position {};
     glm::vec3 color {};
