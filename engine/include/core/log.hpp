@@ -313,19 +313,33 @@ private:
     }
 };
 
-[[maybe_unused]] static void
-core_assert(bool statement, char const* message) noexcept {
-    if (statement) {
-        return;
-    }
+#pragma once
 
-    Log::error(__FILE__, __LINE__, "Assertion failed: ", message);
+#include <cassert> // Para assert()
+#include <cstdlib> // Para exit()
 
-#if defined(NDEBUG) // Release mode.
-    exit(EXIT_FAILURE);
-#else
-    assert(0);
+#include "log.hpp" // Asumiendo que Log::error está definido aquí
+
+#define ENABLE_ASSERTS_IN_RELEASE 1
+
+#ifndef ENABLE_ASSERTS_IN_RELEASE
+    #define ENABLE_ASSERTS_IN_RELEASE 0
 #endif
-}
+
+#if !defined(NDEBUG) || defined(ENABLE_ASSERTS_IN_RELEASE)
+    #define core_assert(statement, message) \
+        if (!(static_cast<bool>(statement))) { \
+            Log::error( \
+                __FILE__, \
+                ":", \
+                __LINE__, \
+                ":\nAssertion failed: ", \
+                message \
+            ); \
+            assert(0); \
+        }
+#else
+    #define core_assert(statement, message)
+#endif
 
 } //namespace core

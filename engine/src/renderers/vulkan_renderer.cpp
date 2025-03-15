@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstring> // strcmp.
 #include <filesystem>
+#include <fstream> // TODO - Delete
 #include <limits>
 #include <map> // multipmap.
 #include <set>
@@ -50,8 +51,22 @@ _vk_expect(vk::ResultValue<T> result_value, const char* message) {
 #pragma region PUBLIC_GFX_API
 
 void
-VulkanRenderer::init(GLFWwindow* window) noexcept {
+VulkanRenderer::init(
+    GLFWwindow* window,
+    DefaultShaderSrc const& default_shader
+) noexcept {
     _window = window;
+    _vertex_shader_spirv = _compile_shader_to_spirv(
+        default_shader.vertex_src,
+        default_shader.vertex_file_path,
+        shaderc_shader_kind::shaderc_vertex_shader
+    );
+
+    _fragment_shader_spirv = _compile_shader_to_spirv(
+        default_shader.fragment_src,
+        default_shader.fragment_file_path,
+        shaderc_shader_kind::shaderc_fragment_shader
+    );
 
     glfwSetFramebufferSizeCallback(_window, s_frame_buffer_resize_callback);
 
@@ -844,20 +859,60 @@ VulkanRenderer::_create_descriptor_sets() noexcept {
 
 #pragma endregion DESCRIPTORS
 
+#pragma region SHADERS
+
+std::vector<u32>
+VulkanRenderer::_compile_shader_to_spirv(
+    std::string const& source,
+    std::string const& file_path,
+    shaderc_shader_kind kind
+) noexcept {
+    shaderc::Compiler compiler;
+    shaderc::CompileOptions options;
+    options.SetTargetEnvironment(
+        shaderc_target_env_vulkan,
+        shaderc_env_version_vulkan_1_3
+    );
+    options.SetOptimizationLevel(shaderc_optimization_level_performance);
+
+    Log::info("Compiling shader to SPIR-V.");
+    Log::info("Shader source code:\n", source);
+
+    shaderc::SpvCompilationResult result =
+        compiler.CompileGlslToSpv(source, kind, file_path.c_str(), options);
+
+    if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
+        Log::error("Shader compilation failed: ", result.GetErrorMessage());
+        return {};
+    }
+
+    std::vector<u32> spirv(result.begin(), result.end());
+    Log::info("Shader compiled successfully.");
+
+    // Imprimir algunos bytes para depuración
+    for (usize i = 0; i < std::min<usize>(spirv.size(), 10); ++i) {
+        Log::info("SPIR-V byte: ", spirv[i]);
+    }
+
+    return spirv;
+}
+
+#pragma endregion
+
 #pragma region GRAPHICS_PIPELINE
 
 vk::UniqueShaderModule
 _create_shader_module(
     vk::UniqueDevice const& logical_device,
-    std::vector<c8> const& code
+    std::vector<u32> const& spirv_code
 ) {
-    vk::ShaderModuleCreateInfo shader_module_create_info {
-        .codeSize = code.size(),
-        .pCode = reinterpret_cast<u32 const*>(code.data()),
+    vk::ShaderModuleCreateInfo const shader_module_info {
+        .codeSize = spirv_code.size() * sizeof(u32), // in bytes.
+        .pCode = spirv_code.data(),
     };
 
     return _vk_expect(
-        logical_device->createShaderModuleUnique(shader_module_create_info),
+        logical_device->createShaderModuleUnique(shader_module_info),
         "Failed to create shader module"
     );
 }
@@ -924,32 +979,16 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     Log::header("Creating Graphics Pipeline.");
 
     // Set up shaders.
-    // FIXME - Use non-harcoded absolute filepath.
-    auto vert_shader_code = read_file_bin(
-        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_vert.spv"
-    );
-    Log::info("Loaded vert shader code.");
-    Log::sub_info("Size: ", vert_shader_code.size());
-
-    auto frag_shader_code = read_file_bin(
-        "/mnt/sara01/dev/v-engine/engine/shaders/compiled/basic_frag.spv"
-    );
-    Log::info("Loaded frag shader code.");
-    Log::sub_info("Size: ", frag_shader_code.size());
+    Log::sub_info("Size: ", _vertex_shader_spirv.size());
+    Log::sub_info("Size: ", _fragment_shader_spirv.size());
 
     vk::UniqueShaderModule vert_shader_module =
-        _create_shader_module(_device, vert_shader_code);
+        _create_shader_module(_device, _vertex_shader_spirv);
     Log::info("Vertex shader module created.");
 
     vk::UniqueShaderModule frag_shader_module =
-        _create_shader_module(_device, frag_shader_code);
+        _create_shader_module(_device, _fragment_shader_spirv);
     Log::info("Fragment shader module created.");
-
-    // Shader code is no longer necessary after creating shader modules.
-    vert_shader_code.clear();
-    vert_shader_code.shrink_to_fit();
-    frag_shader_code.clear();
-    frag_shader_code.shrink_to_fit();
 
     // Create Render Pipeline.
     vk::PipelineShaderStageCreateInfo const vertex_shader_stage_info {
@@ -1800,7 +1839,7 @@ VulkanRenderer::_update_uniform_buffer(u32 const current_image) noexcept {
     ubo.model = glm::rotate(
         glm::mat4(1.0f),
         time * glm::radians(90.0f),
-        glm::vec3(0.0f, 0.0f, 1.0f)
+        glm::vec3(0.0f, 0.0f, 0.2f)
     );
 
     // View matrix it's simply a view from above at a 45 degree angle.

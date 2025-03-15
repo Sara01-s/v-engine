@@ -8,6 +8,9 @@ set(v_engine_VERSION_MAJOR 0)
 set(v_engine_VERSION_MINOR 1)
 set(v_engine_VERSION_PATCH 0)
 
+# Engine Assets directory.
+add_definitions(-DASSETS_DIR="${CMAKE_SOURCE_DIR}/engine/assets")
+
 enable_testing()
 
 add_subdirectory(engine)

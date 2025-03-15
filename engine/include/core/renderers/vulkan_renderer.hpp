@@ -2,6 +2,7 @@
 
 #define VULKAN_HPP_NO_CONSTRUCTORS // Use designated initializers.
 #define VULKAN_HPP_NO_EXCEPTIONS // Use result pattern instead.
+#include <shaderc/shaderc.hpp>
 #include <vulkan/vulkan.hpp> // Must be included before GLFW.
 
 #include <GLFW/glfw3.h>
@@ -10,6 +11,7 @@
 #include <optional>
 
 #include "../log.hpp"
+#include "../renderer.hpp"
 #include "../types.hpp"
 #include "vulkan_drawable.hpp"
 
@@ -29,7 +31,10 @@ public:
     operator=(VulkanRenderer&&) = delete;
 
     void
-    init(GLFWwindow* window) noexcept;
+    init(
+        GLFWwindow* window,
+        DefaultShaderSrc const& default_shader_src
+    ) noexcept;
 
     void
     render() noexcept;
@@ -45,6 +50,11 @@ public:
 private:
     void
     _init_vulkan() noexcept {
+        core_assert(
+            !_vertex_shader_spirv.empty() && !_fragment_shader_spirv.empty(),
+            "Please add a shader to initialize renderer."
+        );
+
         // Execution order is extremely important, do not modify.
         _create_vk_instance();
         _create_surface();
@@ -151,6 +161,13 @@ private:
         vk::DeviceSize const size
     ) noexcept;
 
+    std::vector<u32>
+    _compile_shader_to_spirv(
+        const std::string& source_code,
+        std::string const& file_path,
+        shaderc_shader_kind shader_kind
+    ) noexcept;
+
 private:
 #if defined(NDEBUG) || !defined(USE_VALIDATION_LAYERS)
     static constexpr bool s_enable_validation_layers {false};
@@ -191,6 +208,8 @@ private:
     PerFrameArray<vk::UniqueDescriptorSet> _descriptor_sets {};
     vk::UniquePipelineLayout _pipeline_Layout {nullptr};
     vk::UniquePipeline _graphics_pipeline {nullptr};
+    std::vector<u32> _vertex_shader_spirv {};
+    std::vector<u32> _fragment_shader_spirv {};
 
     // Framebuffers.
     std::vector<vk::UniqueFramebuffer> _swap_chain_framebuffers {};
@@ -228,26 +247,6 @@ private:
     // Interestingly, The book "Game Engine Architecture" by Jason Gregory.
     // (2007), says that index buffers should be composed of 16-bit indices.
     std::array<u16, 6> _indices = {0, 1, 2, 2, 3, 0};
-
-}; // namespace core
-
-// Helper function to read shader files.
-[[maybe_unused]] static std::vector<c8>
-read_file_bin(std::string const& file_name) noexcept {
-    // Start reading file from the end and read it as binary data.
-    std::ifstream file(file_name, std::ios::ate | std::ios::binary);
-
-    core_assert(file.is_open(), "Failed to open file");
-
-    // Since we started at the end, we can tell the file size :).
-    usize const file_size = static_cast<usize>(file.tellg());
-    std::vector<c8> buffer(file_size); // FIXME - change to array.
-
-    file.seekg(0); // Move read pointer to beggining.
-    file.read(buffer.data(), file_size); // Write data to buffer.
-    file.close();
-
-    return buffer;
-}
+};
 
 } // namespace core

@@ -1,15 +1,28 @@
 #pragma once
 
 #include <GLFW/glfw3.h>
+#include <concepts>
+#include <type_traits>
 
 #include "log.hpp"
 #include "types.hpp"
 
 namespace core {
 
+struct DefaultShaderSrc {
+    std::string vertex_file_path {};
+    std::string vertex_src {};
+    std::string fragment_file_path {};
+    std::string fragment_src {};
+};
+
 template <typename T>
-concept RendererAPI = requires(T renderer, GLFWwindow* window) {
-    { renderer.init(window) } -> std::same_as<void>;
+concept RendererAPI = requires(
+    T renderer,
+    GLFWwindow* window,
+    DefaultShaderSrc const& default_shader
+) {
+    { renderer.init(window, default_shader) } -> std::same_as<void>;
     { renderer.render() } -> std::same_as<void>;
     { renderer.cleanup() } -> std::same_as<void>;
 };
@@ -17,9 +30,17 @@ concept RendererAPI = requires(T renderer, GLFWwindow* window) {
 template <RendererAPI GraphicsAPI>
 class Renderer {
 public:
-    explicit Renderer(GraphicsAPI& graphics) : _graphics {graphics} {
+    explicit Renderer(
+        GraphicsAPI& graphics,
+        DefaultShaderSrc const& default_shader
+    )
+        : _graphics {graphics} {
         _init_glfw();
-        _graphics.init(_window); // Give _graphics the ownership of _window.
+
+        _graphics.init(
+            _window,
+            default_shader
+        ); // Give _graphics the ownership of _window.
     }
 
     ~Renderer() {
@@ -27,7 +48,7 @@ public:
     }
 
     void
-    render() {
+    render() noexcept {
         _graphics.render();
     }
 
