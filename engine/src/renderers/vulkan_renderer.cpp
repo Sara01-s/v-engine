@@ -53,20 +53,22 @@ _vk_expect(vk::ResultValue<T> result_value, const char* message) {
 void
 VulkanRenderer::init(
     GLFWwindow* window,
-    DefaultShaderSrc const& default_shader
+    Material const& default_material
 ) noexcept {
     _window = window;
-    _vertex_shader_spirv = _compile_shader_to_spirv(
-        default_shader.vertex_src,
-        default_shader.vertex_file_path,
+    _default_vertex_shader_spirv = _compile_shader_to_spirv(
+        default_material.vertex_source,
+        default_material.vertex_file_path,
         shaderc_shader_kind::shaderc_vertex_shader
     );
 
-    _fragment_shader_spirv = _compile_shader_to_spirv(
-        default_shader.fragment_src,
-        default_shader.fragment_file_path,
+    _default_fragment_shader_spirv = _compile_shader_to_spirv(
+        default_material.fragment_source,
+        default_material.fragment_file_path,
         shaderc_shader_kind::shaderc_fragment_shader
     );
+
+    _default_texture_path = default_material.texture_file_path;
 
     glfwSetFramebufferSizeCallback(_window, s_frame_buffer_resize_callback);
 
@@ -527,39 +529,38 @@ VulkanRenderer::_cleanup_swap_chain() noexcept {
 
 #pragma region IMAGE_VIEWS
 
+vk::UniqueImageView
+VulkanRenderer::_create_image_view(
+    vk::Image image,
+    vk::Format format
+) noexcept {
+    vk::ImageViewCreateInfo const view_info {
+        .image = image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = format,
+        .subresourceRange =
+            {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            }
+    };
+
+    return _vk_expect(
+        _device->createImageViewUnique(view_info),
+        "Failed to create texture image view."
+    );
+}
+
 void
 VulkanRenderer::_create_image_views() noexcept {
     _swap_chain_image_views.resize(_swap_chain_images.size());
 
     for (usize i {}; i < _swap_chain_images.size(); ++i) {
-        vk::ImageViewCreateInfo const image_view_info {
-            .image = _swap_chain_images[i],
-            .viewType = vk::ImageViewType::e2D,
-            .format = _swap_chain_image_format,
-            // Default color components mapping.
-            .components =
-                {
-                    .r = vk::ComponentSwizzle::eIdentity,
-                    .g = vk::ComponentSwizzle::eIdentity,
-                    .b = vk::ComponentSwizzle::eIdentity,
-                    .a = vk::ComponentSwizzle::eIdentity,
-                },
-            .subresourceRange =
-                {
-                    .aspectMask = vk::ImageAspectFlagBits::eColor,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-        };
-
-        auto image_view = _vk_expect(
-            _device->createImageViewUnique(image_view_info),
-            "Failed to create unique image view."
-        );
-
-        _swap_chain_image_views[i] = std::move(image_view);
+        _swap_chain_image_views[i] =
+            _create_image_view(_swap_chain_images[i], _swap_chain_image_format);
     }
 }
 
@@ -617,8 +618,10 @@ _is_device_suitable(
             !swap_chain_info.present_modes.empty();
     }
 
-    bool suitable =
-        indices.is_complete() && extensions_supported && swap_chain_adequate;
+    auto supported_features = device.getFeatures();
+
+    bool const suitable = indices.is_complete() && extensions_supported &&
+        swap_chain_adequate && supported_features.samplerAnisotropy;
 
     Log::info(
         "Checking if device is suitable: ",
@@ -715,7 +718,7 @@ VulkanRenderer::_create_logical_device() noexcept {
         queue_family_indices.present_family.value(),
     };
 
-    f32 queue_priority {1.0f};
+    constexpr f32 queue_priority {1.0f};
     for (u32 const queue_family : unique_queue_families) {
         vk::DeviceQueueCreateInfo queue_create_info {
             .queueFamilyIndex = queue_family,
@@ -727,7 +730,9 @@ VulkanRenderer::_create_logical_device() noexcept {
     }
 
     // Specify device features.
-    vk::PhysicalDeviceFeatures device_features {}; // None.
+    constexpr vk::PhysicalDeviceFeatures device_features {
+        .samplerAnisotropy = vk::True
+    };
 
     // Create Logical Device.
     vk::DeviceCreateInfo device_create_info {
@@ -979,15 +984,15 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     Log::header("Creating Graphics Pipeline.");
 
     // Set up shaders.
-    Log::sub_info("Size: ", _vertex_shader_spirv.size());
-    Log::sub_info("Size: ", _fragment_shader_spirv.size());
+    Log::sub_info("Size: ", _default_vertex_shader_spirv.size());
+    Log::sub_info("Size: ", _default_fragment_shader_spirv.size());
 
     vk::UniqueShaderModule vert_shader_module =
-        _create_shader_module(_device, _vertex_shader_spirv);
+        _create_shader_module(_device, _default_vertex_shader_spirv);
     Log::info("Vertex shader module created.");
 
     vk::UniqueShaderModule frag_shader_module =
-        _create_shader_module(_device, _fragment_shader_spirv);
+        _create_shader_module(_device, _default_fragment_shader_spirv);
     Log::info("Fragment shader module created.");
 
     // Create Render Pipeline.
@@ -1219,6 +1224,51 @@ VulkanRenderer::_create_framebuffers() noexcept {
 
 #pragma region COMMANDS
 
+vk::CommandBuffer
+VulkanRenderer::_begin_single_time_commands() noexcept {
+    vk::CommandBufferAllocateInfo const alloc_info {
+        .commandPool = *_command_pool,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    };
+
+    auto const& command_buffers = _vk_expect(
+        _device->allocateCommandBuffers(alloc_info),
+        "Failed to allocate single time command buffer."
+    );
+
+    constexpr vk::CommandBufferBeginInfo begin_info {
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+    };
+
+    _vk_expect(
+        command_buffers[0].begin(begin_info),
+        "Failed to begin single time command buffer"
+    );
+
+    return command_buffers[0];
+}
+
+void
+VulkanRenderer::_end_single_time_commands(vk::CommandBuffer& command_buffer
+) noexcept {
+    _vk_expect(command_buffer.end(), "Failed to end single time cmd buffer.");
+
+    vk::SubmitInfo const submit_info {
+        .commandBufferCount = 1,
+        .pCommandBuffers = &command_buffer,
+    };
+
+    _vk_expect(
+        _graphics_queue.submit(submit_info),
+        "Failed to submit cmd buffer to graphics queue."
+    );
+
+    _vk_expect(_graphics_queue.waitIdle(), "Failed to wait graphics queue.");
+
+    _device->freeCommandBuffers(*_command_pool, command_buffer);
+}
+
 void
 VulkanRenderer::_create_command_pool() noexcept {
     Log::header("Creating Command Pool.");
@@ -1268,7 +1318,7 @@ VulkanRenderer::_create_command_buffers() noexcept {
 }
 
 void
-VulkanRenderer::_record_command_buffer(u32 const image_index) noexcept {
+VulkanRenderer::_record_command_buffer(u32 image_index) noexcept {
     constexpr vk::CommandBufferBeginInfo begin_info {
         // Possible Flags:
         // vk::CommandBufferUsageFlagBits::eOneTimeSubmit
@@ -1594,25 +1644,7 @@ VulkanRenderer::_copy_buffer(
     vk::UniqueBuffer& dst_buffer,
     vk::DeviceSize const size
 ) noexcept {
-    vk::CommandBufferAllocateInfo const alloc_info {
-        .commandPool = *_command_pool,
-        .level = vk::CommandBufferLevel::ePrimary,
-        .commandBufferCount = 1,
-    };
-
-    auto cmd_buffer = _vk_expect(
-        _device->allocateCommandBuffersUnique(alloc_info),
-        "Failed to allocate Cmd buffer."
-    );
-
-    constexpr vk::CommandBufferBeginInfo begin_info {
-        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-    };
-
-    _vk_expect(
-        cmd_buffer[0]->begin(begin_info),
-        "Failed to begin command buffer."
-    );
+    auto cmd_buffer = _begin_single_time_commands();
 
     vk::BufferCopy const copy_region {
         .srcOffset = 0, // Optional.
@@ -1620,24 +1652,9 @@ VulkanRenderer::_copy_buffer(
         .size = size,
     };
 
-    cmd_buffer[0]->copyBuffer(*src_buffer, *dst_buffer, copy_region);
+    cmd_buffer.copyBuffer(*src_buffer, *dst_buffer, copy_region);
 
-    _vk_expect(cmd_buffer[0]->end(), "Failed to end command buffer.");
-
-    vk::SubmitInfo const submit_info {
-        .commandBufferCount = 1,
-        .pCommandBuffers = &(*cmd_buffer[0]),
-    };
-
-    _vk_expect(
-        _graphics_queue.submit(submit_info),
-        "Failed to submit command buffer."
-    );
-
-    _vk_expect(
-        _graphics_queue.waitIdle(),
-        "Failed to wait for graphics queue."
-    );
+    _end_single_time_commands(cmd_buffer);
 }
 
 void
@@ -1825,7 +1842,7 @@ VulkanRenderer::_create_uniform_buffers() noexcept {
 }
 
 void
-VulkanRenderer::_update_uniform_buffer(u32 const current_image) noexcept {
+VulkanRenderer::_update_uniform_buffer(u32 current_image) noexcept {
     using clock = std::chrono::high_resolution_clock;
     using period = std::chrono::seconds::period;
     static auto start_time = clock::now();
@@ -1867,5 +1884,312 @@ VulkanRenderer::_update_uniform_buffer(u32 const current_image) noexcept {
 }
 
 #pragma endregion BUFFERS
+
+#pragma region TEXTURES
+
+void
+VulkanRenderer::_create_image(
+    u32 width,
+    u32 height,
+    vk::Format format,
+    vk::ImageTiling tiling,
+    vk::ImageUsageFlags usage,
+    vk::MemoryPropertyFlags properties,
+    vk::UniqueImage& image,
+    vk::UniqueDeviceMemory& image_memory
+) noexcept {
+    vk::ImageCreateInfo const image_info {
+        .flags = {}, // Optional.
+        .imageType = vk::ImageType::e2D,
+        .format = format,
+        .extent = {.width = width, .height = height, .depth = 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1, // No multi-sampling.
+        .tiling = tiling,
+        .usage = usage,
+        // Image will only be used by one queue family; graphics.
+        .sharingMode = vk::SharingMode::eExclusive,
+        // eUndefined: Not usable by the GPU and the very first transition will discrad the texels.
+        // ePreinitialized: Not usable by the GPU, but the first transition will preserve the texels.
+        // Preinitialized should be use along eLinear ImageTiling.
+        .initialLayout = vk::ImageLayout::eUndefined,
+    };
+
+    _texture_image = _vk_expect(
+        _device->createImageUnique(image_info),
+        "Failed to create default texture."
+    );
+
+    vk::MemoryRequirements const texture_mem_requirements =
+        _device->getImageMemoryRequirements(*_texture_image);
+
+    vk::MemoryAllocateInfo const texture_alloc_info {
+        .allocationSize = texture_mem_requirements.size,
+        .memoryTypeIndex = _find_memory_type(
+            _physical_device,
+            texture_mem_requirements.memoryTypeBits,
+            vk::MemoryPropertyFlagBits::eDeviceLocal
+        ),
+    };
+
+    _texture_image_memory = _vk_expect(
+        _device->allocateMemoryUnique(texture_alloc_info),
+        "Failed to allocate image memory"
+    );
+
+    _vk_expect(
+        _device->bindImageMemory(*_texture_image, *_texture_image_memory, 0),
+        "Failed to bind image memory."
+    );
+}
+
+void
+VulkanRenderer::_copy_buffer_to_image(
+    vk::UniqueBuffer& buffer,
+    vk::UniqueImage& image,
+    u32 width,
+    u32 height
+) noexcept {
+    Log::info("Copying buffer to image.");
+
+    vk::BufferImageCopy const region {
+        // Buffer byte offset where pixel values start.
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource =
+            {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {width, height, 1}
+    };
+
+    auto command_buffer = _begin_single_time_commands();
+
+    command_buffer.copyBufferToImage(
+        *buffer,
+        *image,
+        vk::ImageLayout::eTransferDstOptimal,
+        1,
+        &region
+    );
+
+    _end_single_time_commands(command_buffer);
+
+    Log::info("Buffer successfully copied to image.");
+}
+
+void
+VulkanRenderer::_transition_image_layout(
+    vk::Image image,
+    vk::Format format,
+    vk::ImageLayout old_layout,
+    vk::ImageLayout new_layout
+) noexcept {
+    auto command_buffer = _begin_single_time_commands();
+
+    // Use a barrier to control access to resources (Images, Buffers).
+    vk::ImageMemoryBarrier image_barrier {
+        .oldLayout = old_layout,
+        .newLayout = new_layout,
+        // If we are using the barrier to transfer queue family ownership,
+        // then these two fields should be the indices of the queue families.
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = image,
+        .subresourceRange =
+            {.aspectMask = vk::ImageAspectFlagBits::eColor,
+             .baseMipLevel = 0,
+             .levelCount = 1,
+             .baseArrayLayer = 0,
+             .layerCount = 1},
+    };
+
+    vk::PipelineStageFlags source_stage {};
+    vk::PipelineStageFlags destination_stage {};
+
+    if (old_layout == vk::ImageLayout::eUndefined &&
+        new_layout == vk::ImageLayout::eTransferDstOptimal) {
+        image_barrier.srcAccessMask = {},
+        image_barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+
+        source_stage = vk::PipelineStageFlagBits::eTopOfPipe;
+        destination_stage = vk::PipelineStageFlagBits::eTransfer;
+    } else if (old_layout == vk::ImageLayout::eTransferDstOptimal &&
+               new_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        image_barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        image_barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+        source_stage = vk::PipelineStageFlagBits::eTransfer;
+        destination_stage = vk::PipelineStageFlagBits::eFragmentShader;
+    } else {
+        core_assert(false, "Unsupported layout transition.");
+    }
+
+    // Transfer stage is a pseude-stage. See More:
+    // src: https://docs.vulkan.org/spec/latest/chapters/synchronization.html#VkPipelineStageFlagBits
+    command_buffer.pipelineBarrier(
+        // Allowed values:
+        // src: https://www.khronos.org/registry/vulkan/specs/1.3-extensions/html/chap7.html#synchronization-access-types-supported
+        source_stage, // In which pipeline stage the operations happen?
+        destination_stage, // In which pipeline stage will the operations wait?
+        vk::DependencyFlags {},
+        nullptr,
+        nullptr,
+        image_barrier
+    );
+
+    _end_single_time_commands(command_buffer);
+}
+
+void
+VulkanRenderer::_create_texture_image() noexcept {
+    int tex_width {0};
+    int tex_height {0};
+    int tex_channels {0};
+
+    stbi_uc* pixels = stbi_load(
+        _default_texture_path.c_str(),
+        &tex_width,
+        &tex_height,
+        &tex_channels,
+        STBI_rgb_alpha
+    );
+
+    // The pixels are laid out row by row with 4 bytes per pixel in the case
+    // of STBI_rgb_alpha for a total of tex_width * tex_height * 4 values.
+    vk::DeviceSize const image_size = tex_width * tex_height * 4;
+
+    core_assert(pixels, "Failed to load texture image.");
+
+    // Allocate buffer for image.
+    vk::UniqueBuffer staging_buffer {};
+    vk::UniqueDeviceMemory staging_buffer_memory {};
+
+    constexpr auto staging_usage = vk::BufferUsageFlagBits::eTransferSrc;
+    constexpr auto staging_properties =
+        vk::MemoryPropertyFlagBits::eHostVisible |
+        vk::MemoryPropertyFlagBits::eHostCoherent;
+    _create_buffer_unique(
+        image_size,
+        staging_usage,
+        staging_properties,
+        staging_buffer,
+        staging_buffer_memory
+    );
+
+    void* data = _vk_expect(
+        _device->mapMemory(*staging_buffer_memory, 0, image_size),
+        "Failed to map Texture Staging Buffer Memory"
+    );
+
+    std::memcpy(data, pixels, static_cast<usize>(image_size));
+    _device->unmapMemory(*staging_buffer_memory);
+
+    stbi_image_free(pixels);
+
+    // We should use the same format as the pixels (STBI_rgb_alpha).
+    // It is possible that the eR8G8B8A8Srgb format is not supported by the
+    // graphics hardware, we should have a list of acceptable alternatives.
+    constexpr vk::Format image_format {vk::Format::eR8G8B8A8Srgb};
+
+    _create_image(
+        tex_width,
+        tex_height,
+        image_format,
+        // eLinear: Texels are laid out in row-major order like the pixels array.
+        // eOptimal: Texels are laid out in an implementation defined order.
+        // Note: If we want to directly acces texels in the image's memory,
+        // then you must use eLinear.
+        vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        _texture_image,
+        _texture_image_memory
+    );
+
+    _transition_image_layout(
+        *_texture_image,
+        image_format,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eTransferDstOptimal
+    );
+
+    _copy_buffer_to_image(
+        staging_buffer,
+        _texture_image,
+        static_cast<u32>(tex_width),
+        static_cast<u32>(tex_height)
+    );
+
+    _transition_image_layout(
+        *_texture_image,
+        image_format,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal
+    );
+}
+
+void
+VulkanRenderer::_create_texture_image_view() noexcept {
+    _texture_image_view =
+        _create_image_view(*_texture_image, vk::Format::eR8G8B8A8Srgb);
+}
+
+#pragma endregion TEXTURES
+
+#pragma region TEXTURE_SAMPLER
+
+void
+VulkanRenderer::_create_texture_sampler() noexcept {
+    auto physical_device_properties = _physical_device.getProperties();
+
+    vk::SamplerCreateInfo const sampler_info {
+        // How to interpolate texels that are magnified or minified.
+        // Maginification occurs when there is oversampling.
+        // Minifification occurs when there is undersampling.
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+        // See address modes visulization.
+        // src: https://docs.vulkan.org/tutorial/latest/06_Texture_mapping/01_Image_view_and_sampler.html#:~:text=The%20image%20below%20displays%20some%20of%20the%20possibilities:
+        .addressModeU = vk::SamplerAddressMode::eRepeat,
+        .addressModeV = vk::SamplerAddressMode::eRepeat,
+        .addressModeW = vk::SamplerAddressMode::eRepeat,
+        // Mipmapping stuff, all disabled for now.
+        .mipLodBias = 0.0f,
+        .anisotropyEnable = vk::True,
+        // A lower value results in better performance, but lower quality results.
+        // We're going to use the max available for the selected physical device.
+        .maxAnisotropy = physical_device_properties.limits.maxSamplerAnisotropy,
+        // If a comparison function is enabled, then texels will first be compared
+        // to a value, and the result of that comparison is used in filtering operations.
+        // This is mainly used for percentage-closer filtering on shadow maps.
+        .compareEnable = vk::False,
+        .compareOp = vk::CompareOp::eAlways,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+        // Which color to return when sampling beyond the image with clamp
+        // to border addressing mode. (You cannot use an arbitrary color).
+        .borderColor = vk::BorderColor::eFloatOpaqueBlack,
+        // Specifies the coordinate system for addressing texels.
+        // vk::True: Use [0, texWidth) and [0, texHeight) range.
+        // vk::False: Use [0, 1) range on all axes.
+        // Normalized coordinates (VK_FALSE) are preferred for varying resolutions.
+        .unnormalizedCoordinates = vk::False,
+    };
+
+    _texture_sampler = _vk_expect(
+        _device->createSamplerUnique(sampler_info),
+        "Failed to create texture sampler."
+    );
+}
+
+#pragma endregion TEXTURE_SAMPLER
 
 } // namespace core

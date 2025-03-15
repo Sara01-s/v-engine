@@ -88,8 +88,8 @@ else()
     FetchContent_MakeAvailable(spirv-tools glslang shaderc)
 endif()
 
-file(GLOB_RECURSE CORE_SOURCES "src/*.cpp")
-file(GLOB_RECURSE CORE_HEADERS "include/core/*.hpp")
+file(GLOB_RECURSE CORE_SOURCES "src/*.cpp" "src/*.c")
+file(GLOB_RECURSE CORE_HEADERS "include/core/*.hpp" "include/core/*.h")
 
 message(STATUS "CORE_SOURCES: ${CORE_SOURCES}")
 message(STATUS "CORE_HEADERS: ${CORE_HEADERS}")

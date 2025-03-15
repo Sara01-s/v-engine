@@ -12,6 +12,7 @@
 
 #include "../log.hpp"
 #include "../renderer.hpp"
+#include "../stb_image.h"
 #include "../types.hpp"
 #include "vulkan_drawable.hpp"
 
@@ -31,10 +32,7 @@ public:
     operator=(VulkanRenderer&&) = delete;
 
     void
-    init(
-        GLFWwindow* window,
-        DefaultShaderSrc const& default_shader_src
-    ) noexcept;
+    init(GLFWwindow* window, Material const& default_material) noexcept;
 
     void
     render() noexcept;
@@ -51,8 +49,9 @@ private:
     void
     _init_vulkan() noexcept {
         core_assert(
-            !_vertex_shader_spirv.empty() && !_fragment_shader_spirv.empty(),
-            "Please add a shader to initialize renderer."
+            !_default_vertex_shader_spirv.empty() &&
+                !_default_fragment_shader_spirv.empty(),
+            "Please add a default material to initialize renderer."
         );
 
         // Execution order is extremely important, do not modify.
@@ -67,6 +66,9 @@ private:
         _create_graphics_pipeline();
         _create_framebuffers();
         _create_command_pool();
+        _create_texture_image();
+        _create_texture_image_view();
+        _create_texture_sampler();
         _create_vertex_buffer();
         _create_index_buffer();
         _create_uniform_buffers();
@@ -140,10 +142,28 @@ private:
     _create_uniform_buffers() noexcept;
 
     void
-    _update_uniform_buffer(u32 const current_image) noexcept;
+    _create_texture_image() noexcept;
 
     void
-    _record_command_buffer(u32 const image_index) noexcept;
+    _create_texture_image_view() noexcept;
+
+    void
+    _create_texture_sampler() noexcept;
+
+    void
+    _update_uniform_buffer(u32 current_image) noexcept;
+
+    vk::UniqueImageView
+    _create_image_view(vk::Image image, vk::Format format) noexcept;
+
+    void
+    _record_command_buffer(u32 image_index) noexcept;
+
+    vk::CommandBuffer
+    _begin_single_time_commands() noexcept;
+
+    void
+    _end_single_time_commands(vk::CommandBuffer& command_buffer) noexcept;
 
     void
     _create_buffer_unique(
@@ -166,6 +186,34 @@ private:
         const std::string& source_code,
         std::string const& file_path,
         shaderc_shader_kind shader_kind
+    ) noexcept;
+
+    void
+    _create_image(
+        u32 width,
+        u32 height,
+        vk::Format format,
+        vk::ImageTiling tiling,
+        vk::ImageUsageFlags usage,
+        vk::MemoryPropertyFlags properties,
+        vk::UniqueImage& image,
+        vk::UniqueDeviceMemory& image_memory
+    ) noexcept;
+
+    void
+    _copy_buffer_to_image(
+        vk::UniqueBuffer& buffer,
+        vk::UniqueImage& image,
+        u32 width,
+        u32 height
+    ) noexcept;
+
+    void
+    _transition_image_layout(
+        vk::Image image,
+        vk::Format format,
+        vk::ImageLayout old_layout,
+        vk::ImageLayout new_layout
     ) noexcept;
 
 private:
@@ -208,8 +256,8 @@ private:
     PerFrameArray<vk::UniqueDescriptorSet> _descriptor_sets {};
     vk::UniquePipelineLayout _pipeline_Layout {nullptr};
     vk::UniquePipeline _graphics_pipeline {nullptr};
-    std::vector<u32> _vertex_shader_spirv {};
-    std::vector<u32> _fragment_shader_spirv {};
+    std::vector<u32> _default_vertex_shader_spirv {};
+    std::vector<u32> _default_fragment_shader_spirv {};
 
     // Framebuffers.
     std::vector<vk::UniqueFramebuffer> _swap_chain_framebuffers {};
@@ -247,6 +295,13 @@ private:
     // Interestingly, The book "Game Engine Architecture" by Jason Gregory.
     // (2007), says that index buffers should be composed of 16-bit indices.
     std::array<u16, 6> _indices = {0, 1, 2, 2, 3, 0};
+
+    // Textures
+    std::string _default_texture_path {};
+    vk::UniqueImage _texture_image {nullptr};
+    vk::UniqueDeviceMemory _texture_image_memory {nullptr};
+    vk::UniqueImageView _texture_image_view {nullptr};
+    vk::UniqueSampler _texture_sampler {nullptr};
 };
 
 } // namespace core
