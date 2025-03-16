@@ -778,9 +778,22 @@ VulkanRenderer::_create_descriptor_set_layout() noexcept {
         .pImmutableSamplers = nullptr, // Optional. (for image sampling).
     };
 
+    constexpr vk::DescriptorSetLayoutBinding sampler_layout_binding {
+        .binding = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        // Sampler are usually used in fragment shaders, but they can also be
+        // used in vertex shader, for example to dynamically deform a grid
+        // of vertices by a heightmap.
+        .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        .pImmutableSamplers = nullptr,
+    };
+
+    std::array const bindings = {ubo_layout_binding, sampler_layout_binding};
+
     vk::DescriptorSetLayoutCreateInfo const layout_info {
-        .bindingCount = 1,
-        .pBindings = &ubo_layout_binding,
+        .bindingCount = static_cast<u32>(bindings.size()),
+        .pBindings = bindings.data(),
     };
 
     _descriptor_set_layout = _vk_expect(
@@ -791,15 +804,17 @@ VulkanRenderer::_create_descriptor_set_layout() noexcept {
 
 void
 VulkanRenderer::_create_descriptor_pool() noexcept {
-    constexpr vk::DescriptorPoolSize pool_size {
-        .descriptorCount = s_max_frames_in_flight
-    };
+    std::array<vk::DescriptorPoolSize, 2> pool_sizes {};
+    pool_sizes[0].descriptorCount = s_max_frames_in_flight;
+    pool_sizes[1].descriptorCount = s_max_frames_in_flight;
 
+    // Warning:
+    // src: https://docs.vulkan.org/tutorial/latest/06_Texture_mapping/02_Combined_image_sampler.html#:~:text=Inadequate%20descriptor%20pools%20are%20a,machines%2C%20but%20fails%20on%20others.
     vk::DescriptorPoolCreateInfo const pool_info {
         .flags = {},
         .maxSets = s_max_frames_in_flight,
-        .poolSizeCount = 1,
-        .pPoolSizes = &pool_size,
+        .poolSizeCount = static_cast<u32>(pool_sizes.size()),
+        .pPoolSizes = pool_sizes.data(),
     };
 
     _descriptor_pool = _vk_expect(
@@ -843,7 +858,13 @@ VulkanRenderer::_create_descriptor_sets() noexcept {
             .range = sizeof(UniformBufferObject)
         };
 
-        vk::WriteDescriptorSet const descriptor_write {
+        vk::DescriptorImageInfo const image_info {
+            .sampler = *_texture_sampler,
+            .imageView = *_texture_image_view,
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        };
+
+        vk::WriteDescriptorSet const ubo_descriptor_write {
             // Descriptor set to update and it's binding.
             .dstSet = *_descriptor_sets[i],
             .dstBinding = 0,
@@ -856,9 +877,30 @@ VulkanRenderer::_create_descriptor_sets() noexcept {
             .pTexelBufferView = nullptr, // Optional.
         };
 
+        vk::WriteDescriptorSet const sampler_descriptor_write {
+            .dstSet = *_descriptor_sets[i],
+            .dstBinding = 1,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .pImageInfo = &image_info,
+            .pTexelBufferView = nullptr, // Optional.
+        };
+
+        std::array<vk::WriteDescriptorSet, 2> const descriptor_writes {
+            ubo_descriptor_write,
+            sampler_descriptor_write
+        };
+
         // We can pass an array to make copies of the descriptor set.
         // But not for now so we set it as nullptr.
-        _device->updateDescriptorSets(descriptor_write, nullptr);
+        _device->updateDescriptorSets(
+            static_cast<u32>(descriptor_writes.size()),
+            descriptor_writes.data(),
+            // Copy stuff, disabled for now.
+            0,
+            nullptr
+        );
     }
 }
 

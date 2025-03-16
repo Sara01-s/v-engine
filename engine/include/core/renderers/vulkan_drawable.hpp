@@ -32,6 +32,7 @@ struct UniformBufferObject {
 struct Vertex {
     glm::vec2 position {};
     glm::vec3 color {};
+    glm::vec2 tex_coord {};
 
     static constexpr vk::VertexInputBindingDescription
     binding_description() noexcept {
@@ -67,7 +68,7 @@ struct Vertex {
         return binding_description;
     }
 
-    static constexpr std::array<vk::VertexInputAttributeDescription, 2>
+    static constexpr std::array<vk::VertexInputAttributeDescription, 3>
     attribute_description() noexcept {
         // Position description.
         constexpr vk::VertexInputAttributeDescription position_desc {
@@ -82,6 +83,7 @@ struct Vertex {
             .offset = offsetof(Vertex, position),
         };
 
+        // Color description.
         constexpr vk::VertexInputAttributeDescription color_desc {
             .location = 1,
             .binding = 0,
@@ -89,7 +91,15 @@ struct Vertex {
             .offset = offsetof(Vertex, color),
         };
 
-        return std::array {position_desc, color_desc};
+        // Texture coordinates description.
+        constexpr vk::VertexInputAttributeDescription tex_coords_desc {
+            .location = 2,
+            .binding = 0,
+            .format = vk::Format::eR32G32Sfloat,
+            .offset = offsetof(Vertex, tex_coord),
+        };
+
+        return std::array {position_desc, color_desc, tex_coords_desc};
     }
 };
 

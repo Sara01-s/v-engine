@@ -286,10 +286,30 @@ private:
 
     // Data to draw.
     std::array<Vertex, 4> _vertices = {
-        Vertex {.position = {-0.5f, -0.5f}, .color = {1.0f, 0.0f, 0.0f}},
-        Vertex {.position = {0.5f, -0.5f}, .color = {0.0f, 1.0f, 0.0f}},
-        Vertex {.position = {0.5, 0.5}, .color = {0.0f, 0.0f, 1.0f}},
-        Vertex {.position = {-0.5, 0.5}, .color = {1.0f, 1.0f, 1.0f}},
+        // Top left.
+        Vertex {
+            .position = {-0.5f, -0.5f},
+            .color = {1.0f, 0.0f, 0.0f},
+            .tex_coord = {1.0f, 0.0f}
+        },
+        // Top right.
+        Vertex {
+            .position = {0.5f, -0.5f},
+            .color = {0.0f, 1.0f, 0.0f},
+            .tex_coord = {0.0f, 0.0f}
+        },
+        // Bottom left.
+        Vertex {
+            .position = {0.5, 0.5},
+            .color = {0.0f, 0.0f, 1.0f},
+            .tex_coord = {0.0f, 1.0f}
+        },
+        // Bottom right.
+        Vertex {
+            .position = {-0.5, 0.5},
+            .color = {1.0f, 1.0f, 1.0f},
+            .tex_coord = {1.0f, 1.0f}
+        },
     };
 
     // Interestingly, The book "Game Engine Architecture" by Jason Gregory.
