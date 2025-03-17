@@ -566,7 +566,8 @@ vk::UniqueImageView
 VulkanRenderer::_create_image_view(
     vk::Image image,
     vk::Format format,
-    vk::ImageAspectFlags aspect_flags
+    vk::ImageAspectFlags aspect_flags,
+    u32 mip_levels
 ) noexcept {
     vk::ImageViewCreateInfo const view_info {
         .image = image,
@@ -576,7 +577,7 @@ VulkanRenderer::_create_image_view(
             {
                 .aspectMask = aspect_flags,
                 .baseMipLevel = 0,
-                .levelCount = 1,
+                .levelCount = mip_levels,
                 .baseArrayLayer = 0,
                 .layerCount = 1,
             }
@@ -596,7 +597,8 @@ VulkanRenderer::_create_image_views() noexcept {
         _swap_chain_image_views[i] = _create_image_view(
             _swap_chain_images[i],
             _swap_chain_image_format,
-            vk::ImageAspectFlagBits::eColor
+            vk::ImageAspectFlagBits::eColor,
+            1 // Mip levels.
         );
     }
 }
@@ -2020,6 +2022,7 @@ void
 VulkanRenderer::_create_image(
     u32 width,
     u32 height,
+    u32 mip_levels,
     vk::Format format,
     vk::ImageTiling tiling,
     vk::ImageUsageFlags usage,
@@ -2032,7 +2035,7 @@ VulkanRenderer::_create_image(
         .imageType = vk::ImageType::e2D,
         .format = format,
         .extent = {.width = width, .height = height, .depth = 1},
-        .mipLevels = 1,
+        .mipLevels = mip_levels,
         .arrayLayers = 1,
         .samples = vk::SampleCountFlagBits::e1, // No multi-sampling.
         .tiling = tiling,
@@ -2124,7 +2127,8 @@ VulkanRenderer::_transition_image_layout(
     vk::Image image,
     vk::Format format,
     vk::ImageLayout old_layout,
-    vk::ImageLayout new_layout
+    vk::ImageLayout new_layout,
+    u32 mip_levels
 ) noexcept {
     auto command_buffer = _begin_single_time_commands();
 
@@ -2140,7 +2144,7 @@ VulkanRenderer::_transition_image_layout(
         .subresourceRange =
             {.aspectMask = vk::ImageAspectFlagBits::eColor,
              .baseMipLevel = 0,
-             .levelCount = 1,
+             .levelCount = _mip_levels,
              .baseArrayLayer = 0,
              .layerCount = 1},
     };
@@ -2207,6 +2211,131 @@ VulkanRenderer::_transition_image_layout(
 }
 
 void
+VulkanRenderer::_generate_mipmaps(
+    vk::Image image,
+    vk::Format format,
+    i32 tex_width,
+    i32 tex_height,
+    u32 mip_levels
+) noexcept {
+    // Check if image format supports linear blitting.
+    auto format_properties = _physical_device.getFormatProperties(format);
+
+    core_assert(
+        format_properties.optimalTilingFeatures &
+            vk::FormatFeatureFlagBits::eSampledImageFilterLinear,
+        "Texture image format does not support linear blitting."
+    );
+
+    vk::CommandBuffer command_buffer = _begin_single_time_commands();
+
+    vk::ImageMemoryBarrier barrier {
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = image,
+        .subresourceRange =
+            {.aspectMask = vk::ImageAspectFlagBits::eColor,
+             .baseMipLevel = 0,
+             .levelCount = 1,
+             .baseArrayLayer = 0,
+             .layerCount = 1}
+    };
+
+    i32 mip_width = tex_width;
+    i32 mip_height = tex_height;
+
+    for (u32 i = 1; i < mip_levels; ++i) {
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+        barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+        barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+
+        command_buffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::DependencyFlags {},
+            nullptr,
+            nullptr,
+            barrier
+        );
+
+        // I didn't use designators here, because they can't be used with arrays "[]".
+        // Generate mip maps.
+        vk::ImageBlit blit {};
+        blit.srcOffsets[0] = {0, 0, 0};
+        blit.srcOffsets[1] = {mip_width, mip_height, 1};
+        blit.srcSubresource = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .mipLevel = i - 1, // i - 1 = Src mip.
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+        blit.dstOffsets[0] = {0, 0, 0};
+        blit.dstOffsets[1] = {
+            mip_width > 1 ? mip_width / 2 : 1, // Each image after the first
+            mip_height > 1 ? mip_height / 2 : 1, // image is halved.
+            1 // 2D Images have a depth of 1.
+        };
+        blit.dstSubresource = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .mipLevel = i, // i = Dst mip.
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        };
+
+        command_buffer.blitImage(
+            image,
+            vk::ImageLayout::eTransferSrcOptimal,
+            image,
+            vk::ImageLayout::eTransferDstOptimal,
+            vk::ArrayProxy<const vk::ImageBlit>(blit),
+            vk::Filter::eLinear
+        );
+
+        // Filtering options.
+        barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+        command_buffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlags {},
+            nullptr,
+            nullptr,
+            barrier
+        );
+
+        if (mip_width > 1) {
+            mip_width /= 2;
+        }
+
+        if (mip_height > 1) {
+            mip_height /= 2;
+        }
+    }
+
+    barrier.subresourceRange.baseMipLevel = mip_levels - 1;
+    barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+    barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+    command_buffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eFragmentShader,
+        vk::DependencyFlags {},
+        nullptr,
+        nullptr,
+        barrier
+    );
+
+    _end_single_time_commands(command_buffer);
+}
+
+void
 VulkanRenderer::_create_texture_image() noexcept {
     int tex_width {0};
     int tex_height {0};
@@ -2219,6 +2348,12 @@ VulkanRenderer::_create_texture_image() noexcept {
         &tex_channels,
         STBI_rgb_alpha
     );
+
+    u32 const largest_dimension =
+        static_cast<u32>(std::max(tex_width, tex_height));
+    f64 const times_divisible_by_two = std::log2(largest_dimension);
+    constexpr u32 original_image {1};
+    _mip_levels = original_image + std::floor(times_divisible_by_two);
 
     // The pixels are laid out row by row with 4 bytes per pixel in the case
     // of STBI_rgb_alpha for a total of tex_width * tex_height * 4 values.
@@ -2260,13 +2395,16 @@ VulkanRenderer::_create_texture_image() noexcept {
     _create_image(
         tex_width,
         tex_height,
+        _mip_levels,
         image_format,
         // eLinear: Texels are laid out in row-major order like the pixels array.
         // eOptimal: Texels are laid out in an implementation defined order.
         // Note: If we want to directly acces texels in the image's memory,
         // then you must use eLinear.
         vk::ImageTiling::eOptimal,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+        vk::ImageUsageFlagBits::eTransferSrc |
+            vk::ImageUsageFlagBits::eTransferDst |
+            vk::ImageUsageFlagBits::eSampled,
         vk::MemoryPropertyFlagBits::eDeviceLocal,
         _texture_image,
         _texture_image_memory
@@ -2276,7 +2414,8 @@ VulkanRenderer::_create_texture_image() noexcept {
         *_texture_image,
         image_format,
         vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal
+        vk::ImageLayout::eTransferDstOptimal,
+        _mip_levels
     );
 
     _copy_buffer_to_image(
@@ -2286,11 +2425,14 @@ VulkanRenderer::_create_texture_image() noexcept {
         static_cast<u32>(tex_height)
     );
 
-    _transition_image_layout(
+    // Each mip map level will be transitioned to shader read only optimal,
+    // after the blit command reading from it is finished.
+    _generate_mipmaps(
         *_texture_image,
-        image_format,
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageLayout::eShaderReadOnlyOptimal
+        vk::Format::eR8G8B8A8Srgb,
+        tex_width,
+        tex_height,
+        _mip_levels
     );
 }
 
@@ -2299,7 +2441,8 @@ VulkanRenderer::_create_texture_image_view() noexcept {
     _texture_image_view = _create_image_view(
         *_texture_image,
         vk::Format::eR8G8B8A8Srgb,
-        vk::ImageAspectFlagBits::eColor
+        vk::ImageAspectFlagBits::eColor,
+        _mip_levels
     );
 }
 
@@ -2334,8 +2477,8 @@ VulkanRenderer::_create_texture_sampler() noexcept {
         // This is mainly used for percentage-closer filtering on shadow maps.
         .compareEnable = vk::False,
         .compareOp = vk::CompareOp::eAlways,
-        .minLod = 0.0f,
-        .maxLod = 0.0f,
+        .minLod = 0.0f, // Try using static_cast<f32>(_mip_levels / 2) lol.
+        .maxLod = vk::LodClampNone,
         // Which color to return when sampling beyond the image with clamp
         // to border addressing mode. (You cannot use an arbitrary color).
         .borderColor = vk::BorderColor::eFloatOpaqueBlack,
@@ -2410,6 +2553,7 @@ VulkanRenderer::_create_depth_resources() noexcept {
     _create_image(
         _swap_chain_extent.width,
         _swap_chain_extent.height,
+        1, // Mip Levels.
         depth_format,
         vk::ImageTiling::eOptimal,
         vk::ImageUsageFlagBits::eDepthStencilAttachment,
@@ -2423,14 +2567,16 @@ VulkanRenderer::_create_depth_resources() noexcept {
     _depth_image_view = _create_image_view(
         *_depth_image,
         depth_format,
-        vk::ImageAspectFlagBits::eDepth
+        vk::ImageAspectFlagBits::eDepth,
+        1 // Mip levels.
     );
 
     _transition_image_layout(
         *_depth_image,
         depth_format,
         vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eDepthStencilAttachmentOptimal
+        vk::ImageLayout::eDepthStencilAttachmentOptimal,
+        1 // Mip levels.
     );
 }
 

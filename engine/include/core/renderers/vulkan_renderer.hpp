@@ -167,7 +167,8 @@ private:
     _create_image_view(
         vk::Image image,
         vk::Format format,
-        vk::ImageAspectFlags aspect_flags
+        vk::ImageAspectFlags aspect_flags,
+        u32 mip_levels
     ) noexcept;
 
     void
@@ -206,6 +207,7 @@ private:
     _create_image(
         u32 width,
         u32 height,
+        u32 mip_levels,
         vk::Format format,
         vk::ImageTiling tiling,
         vk::ImageUsageFlags usage,
@@ -227,7 +229,17 @@ private:
         vk::Image image,
         vk::Format format,
         vk::ImageLayout old_layout,
-        vk::ImageLayout new_layout
+        vk::ImageLayout new_layout,
+        u32 mip_levels
+    ) noexcept;
+
+    void
+    _generate_mipmaps(
+        vk::Image image,
+        vk::Format format,
+        i32 tex_width,
+        i32 tex_height,
+        u32 mip_levels
     ) noexcept;
 
     vk::Format
@@ -307,6 +319,7 @@ private:
 
     // Textures.
     std::string _default_texture_path {};
+    u32 _mip_levels {0};
     vk::UniqueImage _texture_image {nullptr};
     vk::UniqueDeviceMemory _texture_image_memory {nullptr};
     vk::UniqueImageView _texture_image_view {nullptr};
