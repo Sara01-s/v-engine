@@ -67,6 +67,7 @@ private:
         _create_descriptor_set_layout();
         _create_graphics_pipeline();
         _create_command_pool();
+        _create_color_resources();
         _create_depth_resources();
         _create_framebuffers();
         _create_texture_image();
@@ -158,6 +159,9 @@ private:
     _create_depth_resources() noexcept;
 
     void
+    _create_color_resources() noexcept;
+
+    void
     _load_model() noexcept;
 
     void
@@ -208,6 +212,7 @@ private:
         u32 width,
         u32 height,
         u32 mip_levels,
+        vk::SampleCountFlagBits sample_count,
         vk::Format format,
         vk::ImageTiling tiling,
         vk::ImageUsageFlags usage,
@@ -332,6 +337,13 @@ private:
 
     // Model.
     std::string _model_file_path {};
+
+    // MSAA.
+    // 1 sample per-pixel is equivalent to no use of multisampling at all.
+    vk::SampleCountFlagBits _msaa_samples = vk::SampleCountFlagBits::e1;
+    vk::UniqueImage _color_image {nullptr};
+    vk::UniqueDeviceMemory _color_image_memory {nullptr};
+    vk::UniqueImageView _color_image_view {nullptr};
 };
 
 } // namespace core

@@ -521,6 +521,7 @@ VulkanRenderer::_recreate_swap_chain() noexcept {
 
     _create_swap_chain();
     _create_image_views();
+    _create_color_resources();
     _create_depth_resources();
     _create_framebuffers();
 }
@@ -552,6 +553,18 @@ VulkanRenderer::_cleanup_swap_chain() noexcept {
     core_assert(_depth_image_memory, "Depth image memory is nullptr.");
     _device->freeMemory(*_depth_image_memory, nullptr);
     _depth_image_memory.reset();
+
+    core_assert(_color_image_view, "Color image view is nullptr.");
+    _device->destroyImageView(*_color_image_view, nullptr);
+    _color_image_view.reset();
+
+    core_assert(_color_image, "Color image is nullptr.");
+    _device->destroyImage(*_color_image, nullptr);
+    _color_image.reset();
+
+    core_assert(_color_image_memory, "Color image memory is nullptr.");
+    _device->freeMemory(*_color_image_memory, nullptr);
+    _color_image_memory.reset();
 
     core_assert(_swap_chain, "Swap chain is nullptr.");
     _device->destroySwapchainKHR(*_swap_chain, nullptr);
@@ -604,6 +617,71 @@ VulkanRenderer::_create_image_views() noexcept {
 }
 
 #pragma endregion IMAGE_VIEWS
+
+#pragma region MSAA
+
+vk::SampleCountFlagBits
+get_max_usable_sample_count(vk::PhysicalDevice const& physical_device) {
+    auto const& physical_device_properties = physical_device.getProperties();
+
+    vk::SampleCountFlags const counts =
+        physical_device_properties.limits.framebufferColorSampleCounts &
+        physical_device_properties.limits.framebufferDepthSampleCounts;
+
+    if (counts & vk::SampleCountFlagBits::e64) {
+        return vk::SampleCountFlagBits::e64;
+    }
+
+    if (counts & vk::SampleCountFlagBits::e32) {
+        return vk::SampleCountFlagBits::e32;
+    }
+
+    if (counts & vk::SampleCountFlagBits::e16) {
+        return vk::SampleCountFlagBits::e16;
+    }
+
+    if (counts & vk::SampleCountFlagBits::e8) {
+        return vk::SampleCountFlagBits::e8;
+    }
+
+    if (counts & vk::SampleCountFlagBits::e4) {
+        return vk::SampleCountFlagBits::e4;
+    }
+
+    if (counts & vk::SampleCountFlagBits::e2) {
+        return vk::SampleCountFlagBits::e2;
+    }
+
+    return vk::SampleCountFlagBits::e1;
+}
+
+void
+VulkanRenderer::_create_color_resources() noexcept {
+    vk::Format color_format = _swap_chain_image_format;
+
+    _create_image(
+        _swap_chain_extent.width,
+        _swap_chain_extent.height,
+        1, // Mip maps.
+        _msaa_samples,
+        color_format,
+        vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransientAttachment |
+            vk::ImageUsageFlagBits::eColorAttachment,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        _color_image,
+        _color_image_memory
+    );
+
+    _color_image_view = _create_image_view(
+        *_color_image,
+        color_format,
+        vk::ImageAspectFlagBits::eColor,
+        1 // Mip maps.
+    );
+}
+
+#pragma endregion MSAA
 
 #pragma region PHYSICAL_DEVICE
 
@@ -723,6 +801,7 @@ VulkanRenderer::_create_physical_device() noexcept {
 
         if (_is_device_suitable(device, _surface)) {
             _physical_device = device;
+            _msaa_samples = get_max_usable_sample_count(device);
             break;
         }
     }
@@ -770,7 +849,8 @@ VulkanRenderer::_create_logical_device() noexcept {
 
     // Specify device features.
     constexpr vk::PhysicalDeviceFeatures device_features {
-        .samplerAnisotropy = vk::True
+        .sampleRateShading = vk::True,
+        .samplerAnisotropy = vk::True,
     };
 
     // Create Logical Device.
@@ -1007,7 +1087,7 @@ void
 VulkanRenderer::_create_render_pass() noexcept {
     vk::AttachmentDescription const color_attachment {
         .format = _swap_chain_image_format,
-        .samples = vk::SampleCountFlagBits::e1, // Modify if using multi-sample.
+        .samples = _msaa_samples,
         // Clear framebuffer to black beofre drawing a new frame.
         .loadOp = vk::AttachmentLoadOp::eClear,
         // We want to see the result so store the framebuffer information.
@@ -1018,13 +1098,13 @@ VulkanRenderer::_create_render_pass() noexcept {
 
         // We don't care how images come, we'll clear them anyway.
         .initialLayout = vk::ImageLayout::eUndefined,
-        // But we do care how they come out, in this case, as presentable images :)
-        .finalLayout = vk::ImageLayout::ePresentSrcKHR,
+        // Since this is a multi-sampled image, it cannot be presented.
+        .finalLayout = vk::ImageLayout::eColorAttachmentOptimal,
     };
 
     vk::AttachmentDescription const depth_attachment {
         .format = _find_depth_format(_physical_device),
-        .samples = vk::SampleCountFlagBits::e1, // No multi-sampling.
+        .samples = _msaa_samples,
         .loadOp = vk::AttachmentLoadOp::eClear, // Clear on load.
         .storeOp = vk::AttachmentStoreOp::eDontCare,
         .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
@@ -1033,7 +1113,18 @@ VulkanRenderer::_create_render_pass() noexcept {
         .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
     };
 
-    // For now we'll declare only one sub-pass.
+    // Actual presented image.
+    vk::AttachmentDescription const color_attachment_resolve {
+        .format = _swap_chain_image_format,
+        .samples = vk::SampleCountFlagBits::e1,
+        .loadOp = vk::AttachmentLoadOp::eDontCare,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
+        .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
+        .initialLayout = vk::ImageLayout::eUndefined,
+        .finalLayout = vk::ImageLayout::ePresentSrcKHR,
+    };
+
     constexpr vk::AttachmentReference color_attachment_ref {
         .attachment = 0,
         .layout = vk::ImageLayout::eColorAttachmentOptimal,
@@ -1044,11 +1135,18 @@ VulkanRenderer::_create_render_pass() noexcept {
         .layout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
     };
 
+    constexpr vk::AttachmentReference color_attachment_resolve_ref {
+        .attachment = 2,
+        .layout = vk::ImageLayout::eColorAttachmentOptimal,
+    };
+
+    // For now we'll declare only one sub-pass.
     vk::SubpassDescription const subpass {
         .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
         .colorAttachmentCount = 1,
         .pColorAttachments = &color_attachment_ref,
-        .pDepthStencilAttachment = &depth_attachment_ref
+        .pResolveAttachments = &color_attachment_resolve_ref,
+        .pDepthStencilAttachment = &depth_attachment_ref,
     };
 
     constexpr vk::SubpassDependency subpass_dependency {
@@ -1061,13 +1159,15 @@ VulkanRenderer::_create_render_pass() noexcept {
             vk::PipelineStageFlagBits::eLateFragmentTests,
         .dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
             vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+        .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
+            vk::AccessFlagBits::eDepthStencilAttachmentWrite,
         .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
             vk::AccessFlagBits::eDepthStencilAttachmentWrite
     };
 
     // Clear values should match this order also.
-    std::array const attachments = {color_attachment, depth_attachment};
+    std::array const attachments =
+        {color_attachment, depth_attachment, color_attachment_resolve};
 
     vk::RenderPassCreateInfo const render_pass_info {
         .attachmentCount = static_cast<u32>(attachments.size()),
@@ -1189,10 +1289,10 @@ VulkanRenderer::_create_graphics_pipeline() noexcept {
     };
 
     // Multi-sample. ((e.g: for anti-alising)).
-    constexpr vk::PipelineMultisampleStateCreateInfo multi_sampling_info {
-        .rasterizationSamples = vk::SampleCountFlagBits::e1,
-        .sampleShadingEnable = vk::False,
-        .minSampleShading = 1.0f, // Optional.
+    vk::PipelineMultisampleStateCreateInfo const multi_sampling_info {
+        .rasterizationSamples = _msaa_samples,
+        .sampleShadingEnable = vk::True,
+        .minSampleShading = 0.2f,
         .pSampleMask = nullptr, // Optional.
         .alphaToCoverageEnable = vk::False, // Optional.
         .alphaToOneEnable = vk::False, // Optional.
@@ -1328,8 +1428,9 @@ VulkanRenderer::_create_framebuffers() noexcept {
 
     for (usize i {}; i < _swap_chain_image_views.size(); ++i) {
         std::array const attachments = {
+            *_color_image_view,
+            *_depth_image_view,
             *_swap_chain_image_views[i],
-            *_depth_image_view
         };
 
         vk::FramebufferCreateInfo const framebuffer_info {
@@ -2023,6 +2124,7 @@ VulkanRenderer::_create_image(
     u32 width,
     u32 height,
     u32 mip_levels,
+    vk::SampleCountFlagBits sample_count,
     vk::Format format,
     vk::ImageTiling tiling,
     vk::ImageUsageFlags usage,
@@ -2037,7 +2139,7 @@ VulkanRenderer::_create_image(
         .extent = {.width = width, .height = height, .depth = 1},
         .mipLevels = mip_levels,
         .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1, // No multi-sampling.
+        .samples = sample_count,
         .tiling = tiling,
         .usage = usage,
         // Image will only be used by one queue family; graphics.
@@ -2396,6 +2498,7 @@ VulkanRenderer::_create_texture_image() noexcept {
         tex_width,
         tex_height,
         _mip_levels,
+        vk::SampleCountFlagBits::e1,
         image_format,
         // eLinear: Texels are laid out in row-major order like the pixels array.
         // eOptimal: Texels are laid out in an implementation defined order.
@@ -2554,6 +2657,7 @@ VulkanRenderer::_create_depth_resources() noexcept {
         _swap_chain_extent.width,
         _swap_chain_extent.height,
         1, // Mip Levels.
+        _msaa_samples,
         depth_format,
         vk::ImageTiling::eOptimal,
         vk::ImageUsageFlagBits::eDepthStencilAttachment,
@@ -2634,4 +2738,5 @@ VulkanRenderer::_load_model() noexcept {
 }
 
 #pragma endregion MODEL
+
 } // namespace core
