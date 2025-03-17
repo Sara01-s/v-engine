@@ -334,6 +334,8 @@ private:
                 ":", \
                 __LINE__, \
                 ":\nAssertion failed: ", \
+                #statement, \
+                ": ", \
                 message \
             ); \
             assert(0); \

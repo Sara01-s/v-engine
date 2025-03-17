@@ -2,6 +2,7 @@
 
 #define VULKAN_HPP_NO_CONSTRUCTORS // Use designated initializers.
 #define VULKAN_HPP_NO_EXCEPTIONS // Use result pattern instead.
+#define VULKAN_HPP_ASSERT_ON_RESULT // We will use our own asserts.
 #include <shaderc/shaderc.hpp>
 #include <vulkan/vulkan.hpp> // Must be included before GLFW.
 
@@ -13,6 +14,7 @@
 #include "../log.hpp"
 #include "../renderer.hpp"
 #include "../stb_image.h"
+#include "../tiny_obj_loader.hpp"
 #include "../types.hpp"
 #include "vulkan_drawable.hpp"
 
@@ -32,7 +34,7 @@ public:
     operator=(VulkanRenderer&&) = delete;
 
     void
-    init(GLFWwindow* window, Material const& default_material) noexcept;
+    init(GLFWwindow* window, RenderInfo const& test_render_info) noexcept;
 
     void
     render() noexcept;
@@ -64,11 +66,13 @@ private:
         _create_render_pass();
         _create_descriptor_set_layout();
         _create_graphics_pipeline();
-        _create_framebuffers();
         _create_command_pool();
+        _create_depth_resources();
+        _create_framebuffers();
         _create_texture_image();
         _create_texture_image_view();
         _create_texture_sampler();
+        _load_model();
         _create_vertex_buffer();
         _create_index_buffer();
         _create_uniform_buffers();
@@ -151,10 +155,20 @@ private:
     _create_texture_sampler() noexcept;
 
     void
+    _create_depth_resources() noexcept;
+
+    void
+    _load_model() noexcept;
+
+    void
     _update_uniform_buffer(u32 current_image) noexcept;
 
     vk::UniqueImageView
-    _create_image_view(vk::Image image, vk::Format format) noexcept;
+    _create_image_view(
+        vk::Image image,
+        vk::Format format,
+        vk::ImageAspectFlags aspect_flags
+    ) noexcept;
 
     void
     _record_command_buffer(u32 image_index) noexcept;
@@ -215,6 +229,9 @@ private:
         vk::ImageLayout old_layout,
         vk::ImageLayout new_layout
     ) noexcept;
+
+    vk::Format
+    _find_depth_format(vk::PhysicalDevice const& physical_device) noexcept;
 
 private:
 #if defined(NDEBUG) || !defined(USE_VALIDATION_LAYERS)
@@ -285,43 +302,23 @@ private:
     PerFrameArray<void*> _uniform_buffers_mapped {};
 
     // Data to draw.
-    std::array<Vertex, 4> _vertices = {
-        // Top left.
-        Vertex {
-            .position = {-0.5f, -0.5f},
-            .color = {1.0f, 0.0f, 0.0f},
-            .tex_coord = {1.0f, 0.0f}
-        },
-        // Top right.
-        Vertex {
-            .position = {0.5f, -0.5f},
-            .color = {0.0f, 1.0f, 0.0f},
-            .tex_coord = {0.0f, 0.0f}
-        },
-        // Bottom left.
-        Vertex {
-            .position = {0.5, 0.5},
-            .color = {0.0f, 0.0f, 1.0f},
-            .tex_coord = {0.0f, 1.0f}
-        },
-        // Bottom right.
-        Vertex {
-            .position = {-0.5, 0.5},
-            .color = {1.0f, 1.0f, 1.0f},
-            .tex_coord = {1.0f, 1.0f}
-        },
-    };
+    std::vector<Vertex> _vertices {};
+    std::vector<u32> _indices {};
 
-    // Interestingly, The book "Game Engine Architecture" by Jason Gregory.
-    // (2007), says that index buffers should be composed of 16-bit indices.
-    std::array<u16, 6> _indices = {0, 1, 2, 2, 3, 0};
-
-    // Textures
+    // Textures.
     std::string _default_texture_path {};
     vk::UniqueImage _texture_image {nullptr};
     vk::UniqueDeviceMemory _texture_image_memory {nullptr};
     vk::UniqueImageView _texture_image_view {nullptr};
     vk::UniqueSampler _texture_sampler {nullptr};
+
+    // Depth Buffering.
+    vk::UniqueImage _depth_image {nullptr};
+    vk::UniqueDeviceMemory _depth_image_memory {nullptr};
+    vk::UniqueImageView _depth_image_view {nullptr};
+
+    // Model.
+    std::string _model_file_path {};
 };
 
 } // namespace core

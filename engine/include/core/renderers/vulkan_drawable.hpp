@@ -1,6 +1,8 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
 
 #include <array>
 #include <cstddef> // offsetof() macro.
@@ -30,9 +32,16 @@ struct UniformBufferObject {
 };
 
 struct Vertex {
-    glm::vec2 position {};
+    glm::vec3 position {};
     glm::vec3 color {};
-    glm::vec2 tex_coord {};
+    glm::vec2 tex_coords {};
+
+    // Allow use in unordered_maps.
+    bool
+    operator==(Vertex const& other) const {
+        return position == other.position && color == other.color &&
+            tex_coords == other.tex_coords;
+    }
 
     static constexpr vk::VertexInputBindingDescription
     binding_description() noexcept {
@@ -76,8 +85,8 @@ struct Vertex {
             // layout (location = 0) in vec2 position;
             .location = 0,
             .binding = 0,
-            // (two 32-bit signed-floats, vec2 in glsl).
-            .format = vk::Format::eR32G32Sfloat,
+            // (three 32-bit signed-floats, vec3 in glsl).
+            .format = vk::Format::eR32G32B32Sfloat,
             // Given a pointer to a Vertex, how many bytes should be
             // added to get to the position member.
             .offset = offsetof(Vertex, position),
@@ -96,7 +105,7 @@ struct Vertex {
             .location = 2,
             .binding = 0,
             .format = vk::Format::eR32G32Sfloat,
-            .offset = offsetof(Vertex, tex_coord),
+            .offset = offsetof(Vertex, tex_coords),
         };
 
         return std::array {position_desc, color_desc, tex_coords_desc};
@@ -104,3 +113,17 @@ struct Vertex {
 };
 
 } // namespace core
+
+// Allow unordered map usage.
+namespace std {
+template <>
+struct hash<core::Vertex> {
+    size_t
+    operator()(core::Vertex const& vertex) const {
+        return ((hash<glm::vec3>()(vertex.position) ^
+                 (hash<glm::vec3>()(vertex.color) << 1)) >>
+                1) ^
+            (hash<glm::vec2>()(vertex.tex_coords) << 1);
+    }
+};
+} // namespace std
